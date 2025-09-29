@@ -31,11 +31,11 @@
 
 <script>
 /* ===================================================================
-   ECHOES OF A FORGOTTEN SYSTEM (v3.1 - Bugfix & Balancing)
-   - 공격 타이밍 미니게임이 즉시 종료되던 버그 수정
-   - 첫 번째 보스의 세 번째 패턴 밸런스 조정
+   ECHOES OF A FORGOTTEN SYSTEM (v3.2 - Final Bugfix)
+   - 엔딩 분기 로직 오류 수정
+   - 대화창 UI 겹침 문제 해결
+   - ACT/ITEM 메뉴 자동 선택 버그 수정
    - 3+1 멀티 엔딩 시스템 및 진 엔딩 (LocalStorage 이용)
-   - 파티클 시스템 도입 및 모든 보스 공격 패턴 강화/추가
    =================================================================== */
 
 const cvs = document.getElementById('game');
@@ -71,7 +71,6 @@ const G = {
   width: cvs.width, height: cvs.height,
   lastTime: now(), dt: 0, shakeT: 0, flashT: 0,
   currentStage: 'gateway',
-  gameCleared: false,
   endingState: { kills: 0, spares: 0 },
   particles: [],
 };
@@ -261,7 +260,7 @@ function startBattle(bossId) {
   battle.enemy.mercyStat = battle.enemy.mercyMax = data.mercyValue;
   battle.enemy.mercyName = data.mercyStatName;
   battle.enemy.spareThreshold = data.mercyThreshold;
-  battle.ui.msg = [data.introDialogue];
+  pushMsg(data.introDialogue, 120);
   G.state = "battle";
 }
 
@@ -284,12 +283,10 @@ function battleUpdate(dt) {
     case "attack_timing": attackTimingUpdate(dt); break;
     case "enemy_turn": enemyTurnUpdate(dt); break;
     case "result":
+      // 이 함수는 전투 승리 후 딱 한 번만 실행됨
       const spared = battle.enemy.mercyStat <= battle.enemy.spareThreshold;
       const killed = battle.enemy.hp <= 0;
       if (spared) G.endingState.spares++; else if (killed) G.endingState.kills++;
-      
-      G.winMsg = killed ? "파괴하여 안정화했다." : "자비를 베풀어 시스템을 복원했다.";
-      G.state = "win";
       
       const stage = world.stages[G.currentStage];
       const npc = stage.npcs.find(n=>n.id === battle.currentBossId);
@@ -298,13 +295,18 @@ function battleUpdate(dt) {
       const allDefeatedInStage = stage.npcs.every(n => n.defeated);
       if(allDefeatedInStage && stage.portal) stage.portal.active = true;
 
-      // 최종 보스 및 엔딩 분기
+      // 최종 보스 및 엔딩 분기 로직
       if(battle.currentBossId === 'kernel') {
-          if (G.endingState.kills === 0) { // 평화 루트
+          if (G.endingState.kills === 0) { // 평화 루트 -> 최종 보스전
+            G.state = 'intermission'; // 잠시 대기 상태
             setTimeout(() => startBattle('anomaly'), 2000);
+          } else { // 중립/파괴 루트 -> 오버월드 복귀
+            G.state = "overworld";
           }
-      } else if (battle.currentBossId === 'anomaly') {
-          G.gameCleared = true; // 평화 엔딩 조건 달성
+      } else if (battle.currentBossId === 'anomaly') { // 최종 보스 클리어 -> 평화 엔딩
+          G.state = 'ending';
+      } else { // 일반 보스 클리어 -> 오버월드 복귀
+          G.state = "overworld";
       }
       break;
   }
@@ -338,12 +340,16 @@ function battleDraw() {
   else if (battle.phase === "attack_timing") attackTimingDraw();
   else if (battle.phase === "enemy_turn") enemyTurnDraw();
   
-  const lines = battle.ui.msg.slice(-2);
-  drawText(lines[0] || "", 30, G.height-82, "#fff", "left", 16);
-  if(lines[1]) drawText(lines[1] || "", 30, G.height-60, "#fff", "left", 16);
+  // 메시지 렌더링
+  const line = battle.ui.msg[0] || "";
+  drawText(line, 30, G.height-82, "#fff", "left", 16);
 }
 
-function pushMsg(s, dur=90) { battle.ui.msg.push(s); battle.ui.msgTimer = dur; }
+function pushMsg(s, dur=90) { 
+  // UI 겹침 버그 수정: 메시지 배열을 초기화하고 새 메시지를 넣음
+  battle.ui.msg = [s]; 
+  battle.ui.msgTimer = dur; 
+}
 
 function menuUpdate() {
   const ui = battle.ui;
@@ -355,13 +361,25 @@ function menuUpdate() {
     if (pressed(["z","Z","Enter"])) {
       beep("sawtooth",760,0.05,0.02);
       const selectedAction = menuOrder[ui.mainIndex];
+      // BUG FIX: 모든 메뉴 선택 시 키 입력이 다음 프레임으로 넘어가는 것을 방지
+      const clearKeys = () => { keys['z'] = keys['Z'] = keys['Enter'] = false; };
+      
       if (selectedAction === 0) {
         startAttackTiming();
-        // BUG FIX: 키 입력이 다음 프레임으로 넘어가는 것을 방지
-        keys['z'] = keys['Z'] = keys['Enter'] = false;
+        clearKeys();
       }
-      else if (selectedAction === 1) { battle.sub = "menu_act"; ui.listIndex = 0; pushMsg("무엇을 할까?"); }
-      else if (selectedAction === 2) { battle.sub = "menu_item"; ui.listIndex = 0; pushMsg("아이템을 선택해 시스템을 복구한다."); }
+      else if (selectedAction === 1) { 
+        battle.sub = "menu_act"; 
+        ui.listIndex = 0; 
+        pushMsg("무엇을 할까?");
+        clearKeys();
+      }
+      else if (selectedAction === 2) { 
+        battle.sub = "menu_item"; 
+        ui.listIndex = 0; 
+        pushMsg("아이템을 선택해 시스템을 복구한다.");
+        clearKeys();
+      }
       else if (selectedAction === 3) {
         if (battle.enemy.mercyStat <= battle.enemy.spareThreshold) {
           pushMsg("자비를 베풀었다. 노드가 안정화되었다...");
@@ -428,9 +446,9 @@ function startAttackTiming() { battle.phase = "attack_timing"; battle.atk.active
 function attackTimingUpdate(dt) { const a = battle.atk; a.pointer += a.dir * 3.2 * dt * 60; if (a.pointer <= a.barX) a.dir = 1; if (a.pointer >= a.barX + a.barW) a.dir = -1; if (pressed(["z","Z","Enter"])) { const d = Math.abs(a.pointer - a.zoneX); let dmg = (d < a.zoneW*0.5) ? 12 : (d < a.zoneW) ? 9 : (d < a.zoneW*1.8) ? 6 : 3; battle.enemy.hp = Math.max(0, battle.enemy.hp - dmg); G.shakeT=5; spawnParticles(G.width/2, 100, 10, {color:'#fff', speed:3}); beep("square", 220 + 20*dmg, 0.07, 0.03); pushMsg(`공격! ${dmg}의 데미지.`); if (battle.enemy.hp<=0) { battle.enemy.alive = false; battle.phase = "result"; G.flashT=10; spawnParticles(G.width/2, 100, 50, {color:'#f00', speed:5}); return; } endPlayerTurn(); } }
 function attackTimingDraw() { const bx = battle.atk.barX, by = G.height-84; drawRect(bx, by, battle.atk.barW, 8, "#444"); drawRect(battle.atk.zoneX - battle.atk.zoneW/2, by-2, battle.atk.zoneW, 12, "#ff0", false, 2); drawRect(battle.atk.pointer-2, by-6, 4, 20, "#fff"); }
 function endPlayerTurn() { battle.phase = "enemy_turn"; battle.waveTime = 0; battle.bullets.length = 0; battle.soul.invul = Math.max(0, battle.soul.invul); const patternCount = battle.currentBossData.attackPatterns.length; battle.waveIndex = (battle.waveIndex + 1) % patternCount; battle.ui.shuffleMap = null; battle.waveState=null; }
-function enemyTurnUpdate(dt) { const b = battle.box, s = battle.soul, sp = s.speed * dt * 60; b.w += (b.targetW - b.w) * 0.1; b.h += (b.targetH - b.h) * 0.1; b.x = G.width/2 - b.w/2; b.y = 150; let vx=0, vy=0; if (pressed(["ArrowLeft"])) vx -= 1; if (pressed(["ArrowRight"])) vx += 1; if (pressed(["ArrowUp"])) vy -= 1; if (pressed(["ArrowDown"])) vy += 1; s.x = clamp(s.x + vx*sp, b.x + s.r, b.x + b.w - s.r); s.y = clamp(s.y + vy*sp, b.y + s.r, b.y + b.h - s.r); battle.waveTime += dt; battle.currentBossData.attackPatterns[battle.waveIndex](battle.waveTime, dt, battle); for (let i = battle.bullets.length - 1; i >= 0; i--) { const bu = battle.bullets[i]; bu.x += (bu.vx || 0) * dt * 60; bu.y += (bu.vy || 0) * dt * 60; if(bu.update) bu.update(bu, dt, battle); if (bu.x<-20 || bu.x>G.width+20 || bu.y<-20 || bu.y>G.height+20) bu.dead = true; if(bu.dead) { if(bu.color) spawnParticles(bu.x, bu.y, 3, {color:bu.color, life:0.2, speed:1}); battle.bullets.splice(i, 1); continue; } const dx = bu.x - s.x, dy = bu.y - s.y; if (dx*dx + dy*dy < (s.r + bu.r)*(s.r + bu.r) && s.invul <= 0) { takeDamage(bu.dmg||3); s.invul = 1.0; G.shakeT = 10; spawnParticles(s.x, s.y, 20, {color:'#f00', life:0.4, speed:2}); } } if (s.invul>0) s.invul -= dt; if ((battle.waveTime > 6.5 && battle.currentBossId !== 'anomaly') || (battle.waveTime > 8.5 && battle.currentBossId === 'anomaly') || battle.player.hp<=0) { if (battle.player.hp<=0) battle.phase = "result"; else { battle.phase = "menu"; battle.sub = "menu_main"; pushMsg("당신의 턴이다."); } b.targetW = 280; b.targetH = 120; } }
+function enemyTurnUpdate(dt) { const b = battle.box, s = battle.soul, sp = s.speed * dt * 60; b.w += (b.targetW - b.w) * 0.1; b.h += (b.targetH - b.h) * 0.1; b.x = G.width/2 - b.w/2; b.y = 150; let vx=0, vy=0; if (pressed(["ArrowLeft"])) vx -= 1; if (pressed(["ArrowRight"])) vx += 1; if (pressed(["ArrowUp"])) vy -= 1; if (pressed(["ArrowDown"])) vy += 1; s.x = clamp(s.x + vx*sp, b.x + s.r, b.x + b.w - s.r); s.y = clamp(s.y + vy*sp, b.y + s.r, b.y + b.h - s.r); battle.waveTime += dt; battle.currentBossData.attackPatterns[battle.waveIndex](battle.waveTime, dt, battle); for (let i = battle.bullets.length - 1; i >= 0; i--) { const bu = battle.bullets[i]; bu.x += (bu.vx || 0) * dt * 60; bu.y += (bu.vy || 0) * dt * 60; if(bu.update) bu.update(bu, dt, battle); if (bu.x<-20 || bu.x>G.width+20 || bu.y<-20 || bu.y>G.height+20) bu.dead = true; if(bu.dead) { if(bu.color) spawnParticles(bu.x, bu.y, 3, {color:bu.color, life:0.2, speed:1}); battle.bullets.splice(i, 1); continue; } const dx = bu.x - s.x, dy = bu.y - s.y; if (dx*dx + dy*dy < (s.r + bu.r)*(s.r + bu.r) && s.invul <= 0) { takeDamage(bu.dmg||3); s.invul = 1.0; G.shakeT = 10; spawnParticles(s.x, s.y, 20, {color:'#f00', life:0.4, speed:2}); } } if (s.invul>0) s.invul -= dt; if ((battle.waveTime > 6.5 && battle.currentBossId !== 'anomaly') || (battle.waveTime > 8.5 && battle.currentBossId === 'anomaly') || battle.player.hp<=0) { if (battle.player.hp<=0) G.state = "lose"; else { battle.phase = "menu"; battle.sub = "menu_main"; pushMsg("당신의 턴이다."); } b.targetW = 280; b.targetH = 120; } }
 function enemyTurnDraw() { const b = battle.box; drawFrame(b.x, b.y, b.w, b.h, "#fff"); const s = battle.soul; ctx.save(); if (s.invul>0) ctx.globalAlpha = 0.5 + 0.5*Math.sin(now()/50); drawRect(s.x - s.r, s.y - s.r, s.r*2, s.r*2, "#f00"); ctx.restore(); for (const bu of battle.bullets) { if(bu.text) drawCenterText(bu.text, bu.x, bu.y, bu.color||'#fff', bu.r*4); else drawRect(bu.x - bu.r, bu.y - bu.r, bu.r*2, bu.r*2, bu.color||"#fff"); } }
-function takeDamage(dmg) { battle.player.hp = Math.max(0, battle.player.hp - dmg); beep("triangle",160,0.08,0.04); pushMsg(`HIT! -${dmg} HP`); if (battle.player.hp<=0) { G.flashT=15; battle.phase = "result"; } }
+function takeDamage(dmg) { battle.player.hp = Math.max(0, battle.player.hp - dmg); beep("triangle",160,0.08,0.04); pushMsg(`HIT! -${dmg} HP`); if (battle.player.hp<=0) { G.flashT=15; G.state = "lose"; } }
 
 // ------------------------------------------------------------
 // 보스 데이터 (신규 패턴 및 이펙트 강화)
@@ -454,8 +472,20 @@ function loop() {
   ctx.save(); ctx.translate(ox, oy);
 
   if (G.state === "title") { titleUpdate(); titleDraw(); } 
-  else if (G.state === "overworld") { worldUpdate(dt); worldDraw(); } 
-  else if (G.state === "battle") { battleUpdate(dt); battleDraw(); } 
+  else if (G.state === "overworld") {
+    // 오버월드에서 모든 보스를 처치했는지 확인하고 엔딩으로 전환
+    const allBosses = Object.values(world.stages).flatMap(s => s.npcs);
+    if (allBosses.every(n => n.defeated) && G.endingState.kills > 0) {
+      G.state = 'ending';
+    } else {
+      worldUpdate(dt); worldDraw();
+    }
+  } 
+  else if (G.state === "battle") { battleUpdate(dt); battleDraw(); }
+  else if (G.state === 'intermission') {
+    ctx.fillStyle="#000"; ctx.fillRect(0,0,G.width,G.height);
+    drawCenterText("균열의 근원이 모습을 드러냅니다...", G.width/2, G.height/2, '#f0f');
+  }
   else { endDraw(); }
   
   updateAndDrawParticles(dt);
@@ -467,39 +497,42 @@ function titleDraw() {
   ctx.fillStyle="#000"; ctx.fillRect(0,0,G.width,G.height);
   drawCenterText("Echoes of a Forgotten System", G.width/2, 120, "#fff", 22);
   drawCenterText("Z/Enter 키로 시스템에 접속", G.width/2, 180, "#ff0", 16);
-  drawCenterText("v3.1 - The Architect's Will", G.width/2, 220, "#bbb", 14);
+  drawCenterText("v3.2 - The Architect's Will", G.width/2, 220, "#bbb", 14);
   const endings = saveManager.getUnlockedEndings();
   const unlockedCount = Object.values(endings).filter(Boolean).length;
   drawText(`기억 복원율: ${unlockedCount}/3`, 10, G.height-20, '#888', 'left', 12);
 }
 function endDraw() {
-    const totalBosses = 4; // 센티널, 아카이브, 제스터, 커널
-    let endingType = "neutral";
-    if (G.gameCleared) { // 평화 엔딩 클리어 시
-        endingType = "pacifist";
-    } else if (G.endingState.kills >= totalBosses) {
-        endingType = "destruction";
-    } else if (G.endingState.kills > 0 || G.endingState.spares > 0) { // 중립 엔딩 조건 완화
-        endingType = "neutral";
+    // 이 함수는 게임의 최종 결말을 그리는 역할만 함
+    if (G.state !== 'ending' && G.state !== 'lose' && G.state !== 'revelation') {
+      G.state = 'ending'; // 안전장치
     }
 
-    if (G.state === 'win') {
+    let endingType;
+    if (G.state === 'lose') {
+      endingType = 'lose';
+    } else {
+      const totalBosses = 4;
+      if (G.endingState.kills === 0 && battle.currentBossId === 'anomaly') {
+          endingType = 'pacifist';
+      } else if (G.endingState.kills >= totalBosses) {
+          endingType = 'destruction';
+      } else {
+          endingType = 'neutral';
+      }
+    }
+    
+    if (endingType !== 'lose') {
         saveManager.saveEnding(endingType);
         if (endingType === 'pacifist' && saveManager.allEndingsUnlocked()) {
             G.state = 'revelation'; // 진 엔딩으로 전환
-        } else {
-            G.state = 'ending_screen';
-            G.endingType = endingType;
         }
-    } else if (G.state === 'lose') {
-        G.state = 'ending_screen';
-        G.endingType = 'lose';
     }
 
     ctx.fillStyle="#000"; ctx.fillRect(0,0,G.width,G.height);
     let msg1="", msg2="", color="#fff";
 
-    switch(G.endingType) {
+    switch(G.state === 'revelation' ? 'revelation' : endingType) {
         case 'pacifist':
             msg1 = "'생츄어리'의 모든 균열이 정화되었습니다.";
             msg2 = "시스템에 평화가 찾아왔습니다.";
@@ -530,7 +563,7 @@ function endDraw() {
     drawCenterText(msg1, G.width/2, 140, color, 18);
     drawCenterText(msg2, G.width/2, 180, color, 18);
 
-    if (G.endingType === 'revelation') {
+    if (G.state === 'revelation') {
         drawCenterText("진정한 이야기는 이제 시작입니다. 감사합니다.", G.width/2, 230, "#fff", 16);
         drawCenterText("게임을 다시 시작하려면 F5를 누르십시오.", G.width/2, 260, "#bbb", 14);
     } else {
