@@ -31,11 +31,11 @@
 
 <script>
 /* ===================================================================
-   ECHOES OF A FORGOTTEN SYSTEM (v3.2 - Final Bugfix)
+   ECHOES OF A FORGOTTEN SYSTEM (v3.3 - Final Stability Patch)
+   - 대화 넘김 시 키 입력이 유지되던 버그 수정
    - 엔딩 분기 로직 오류 수정
    - 대화창 UI 겹침 문제 해결
    - ACT/ITEM 메뉴 자동 선택 버그 수정
-   - 3+1 멀티 엔딩 시스템 및 진 엔딩 (LocalStorage 이용)
    =================================================================== */
 
 const cvs = document.getElementById('game');
@@ -62,6 +62,7 @@ const keys = {};
 window.addEventListener('keydown', (e)=>{ const k = e.key; keys[k] = true; if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","z","Z","x","X","Enter"].includes(k)) e.preventDefault(); });
 window.addEventListener('keyup', (e)=>{ keys[e.key] = false; });
 function pressed(names) { for (const n of names) if (keys[n]) return true; return false; }
+function clearConfirmKeys() { keys['z'] = keys['Z'] = keys['Enter'] = false; }
 
 // ------------------------------------------------------------
 // 전역 게임 상태
@@ -278,12 +279,18 @@ function battleReset() {
 function battleUpdate(dt) {
   if (battle.ui.msgTimer > 0) battle.ui.msgTimer -= 1;
   switch(battle.phase) {
-    case "intro": if (pressed(["z","Z","Enter"]) && battle.ui.msgTimer <= 0) { battle.phase = "menu"; battle.sub = "menu_main"; pushMsg("당신의 턴이다.")} break;
+    case "intro": 
+      if (pressed(["z","Z","Enter"]) && battle.ui.msgTimer <= 0) {
+        battle.phase = "menu"; 
+        battle.sub = "menu_main"; 
+        pushMsg("당신의 턴이다.");
+        clearConfirmKeys(); // BUG FIX: 키 입력 유지 버그 수정
+      } 
+      break;
     case "menu": menuUpdate(); break;
     case "attack_timing": attackTimingUpdate(dt); break;
     case "enemy_turn": enemyTurnUpdate(dt); break;
     case "result":
-      // 이 함수는 전투 승리 후 딱 한 번만 실행됨
       const spared = battle.enemy.mercyStat <= battle.enemy.spareThreshold;
       const killed = battle.enemy.hp <= 0;
       if (spared) G.endingState.spares++; else if (killed) G.endingState.kills++;
@@ -295,17 +302,12 @@ function battleUpdate(dt) {
       const allDefeatedInStage = stage.npcs.every(n => n.defeated);
       if(allDefeatedInStage && stage.portal) stage.portal.active = true;
 
-      // 최종 보스 및 엔딩 분기 로직
-      if(battle.currentBossId === 'kernel') {
-          if (G.endingState.kills === 0) { // 평화 루트 -> 최종 보스전
-            G.state = 'intermission'; // 잠시 대기 상태
-            setTimeout(() => startBattle('anomaly'), 2000);
-          } else { // 중립/파괴 루트 -> 오버월드 복귀
-            G.state = "overworld";
-          }
-      } else if (battle.currentBossId === 'anomaly') { // 최종 보스 클리어 -> 평화 엔딩
+      if(battle.currentBossId === 'kernel' && G.endingState.kills === 0) {
+          G.state = 'intermission';
+          setTimeout(() => startBattle('anomaly'), 2000);
+      } else if (battle.currentBossId === 'anomaly') {
           G.state = 'ending';
-      } else { // 일반 보스 클리어 -> 오버월드 복귀
+      } else {
           G.state = "overworld";
       }
       break;
@@ -340,20 +342,18 @@ function battleDraw() {
   else if (battle.phase === "attack_timing") attackTimingDraw();
   else if (battle.phase === "enemy_turn") enemyTurnDraw();
   
-  // 메시지 렌더링
   const line = battle.ui.msg[0] || "";
   drawText(line, 30, G.height-82, "#fff", "left", 16);
 }
 
 function pushMsg(s, dur=90) { 
-  // UI 겹침 버그 수정: 메시지 배열을 초기화하고 새 메시지를 넣음
   battle.ui.msg = [s]; 
   battle.ui.msgTimer = dur; 
 }
 
 function menuUpdate() {
   const ui = battle.ui;
-  const menuOrder = ui.shuffleMap || [0, 1, 2, 3]; // 0:ATK, 1:ACT, 2:ITEM, 3:MERCY
+  const menuOrder = ui.shuffleMap || [0, 1, 2, 3];
 
   if (battle.sub === "menu_main") {
     if (pressed(["ArrowLeft"])) { ui.mainIndex = (ui.mainIndex + 3) % 4; keys["ArrowLeft"]=false; beep("square",520,0.05,0.02); }
@@ -361,25 +361,10 @@ function menuUpdate() {
     if (pressed(["z","Z","Enter"])) {
       beep("sawtooth",760,0.05,0.02);
       const selectedAction = menuOrder[ui.mainIndex];
-      // BUG FIX: 모든 메뉴 선택 시 키 입력이 다음 프레임으로 넘어가는 것을 방지
-      const clearKeys = () => { keys['z'] = keys['Z'] = keys['Enter'] = false; };
       
-      if (selectedAction === 0) {
-        startAttackTiming();
-        clearKeys();
-      }
-      else if (selectedAction === 1) { 
-        battle.sub = "menu_act"; 
-        ui.listIndex = 0; 
-        pushMsg("무엇을 할까?");
-        clearKeys();
-      }
-      else if (selectedAction === 2) { 
-        battle.sub = "menu_item"; 
-        ui.listIndex = 0; 
-        pushMsg("아이템을 선택해 시스템을 복구한다.");
-        clearKeys();
-      }
+      if (selectedAction === 0) { startAttackTiming(); }
+      else if (selectedAction === 1) { battle.sub = "menu_act"; ui.listIndex = 0; pushMsg("무엇을 할까?"); }
+      else if (selectedAction === 2) { battle.sub = "menu_item"; ui.listIndex = 0; pushMsg("아이템을 선택해 시스템을 복구한다."); }
       else if (selectedAction === 3) {
         if (battle.enemy.mercyStat <= battle.enemy.spareThreshold) {
           pushMsg("자비를 베풀었다. 노드가 안정화되었다...");
@@ -390,6 +375,8 @@ function menuUpdate() {
           endPlayerTurn();
         }
       }
+      
+      if (selectedAction <= 2) { clearConfirmKeys(); }
     }
   } else if (["menu_act", "menu_item"].includes(battle.sub)) {
       const list = battle.sub === "menu_act" ? battle.currentBossData.actOptions : battle.player.inv;
@@ -473,10 +460,10 @@ function loop() {
 
   if (G.state === "title") { titleUpdate(); titleDraw(); } 
   else if (G.state === "overworld") {
-    // 오버월드에서 모든 보스를 처치했는지 확인하고 엔딩으로 전환
     const allBosses = Object.values(world.stages).flatMap(s => s.npcs);
     if (allBosses.every(n => n.defeated) && G.endingState.kills > 0) {
       G.state = 'ending';
+      endDraw();
     } else {
       worldUpdate(dt); worldDraw();
     }
@@ -497,17 +484,12 @@ function titleDraw() {
   ctx.fillStyle="#000"; ctx.fillRect(0,0,G.width,G.height);
   drawCenterText("Echoes of a Forgotten System", G.width/2, 120, "#fff", 22);
   drawCenterText("Z/Enter 키로 시스템에 접속", G.width/2, 180, "#ff0", 16);
-  drawCenterText("v3.2 - The Architect's Will", G.width/2, 220, "#bbb", 14);
+  drawCenterText("v3.3 - The Architect's Will", G.width/2, 220, "#bbb", 14);
   const endings = saveManager.getUnlockedEndings();
   const unlockedCount = Object.values(endings).filter(Boolean).length;
   drawText(`기억 복원율: ${unlockedCount}/3`, 10, G.height-20, '#888', 'left', 12);
 }
 function endDraw() {
-    // 이 함수는 게임의 최종 결말을 그리는 역할만 함
-    if (G.state !== 'ending' && G.state !== 'lose' && G.state !== 'revelation') {
-      G.state = 'ending'; // 안전장치
-    }
-
     let endingType;
     if (G.state === 'lose') {
       endingType = 'lose';
@@ -525,7 +507,7 @@ function endDraw() {
     if (endingType !== 'lose') {
         saveManager.saveEnding(endingType);
         if (endingType === 'pacifist' && saveManager.allEndingsUnlocked()) {
-            G.state = 'revelation'; // 진 엔딩으로 전환
+            G.state = 'revelation';
         }
     }
 
