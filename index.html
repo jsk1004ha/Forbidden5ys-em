@@ -215,8 +215,8 @@ const world = {
       { id: 'sentinel', x: 320, y: 150, w: 16, h: 16, symbol: 'S', color: '#ff6600', defeated: false },
       { id: 'shopkeeper', x: 150, y: 100, w: 16, h: 16, symbol: '$', color: '#ffff00', defeated: false, isShop: true }
     ], portal: { x: 580, y: 150, w: 20, h: 40, active: false, to: 'trench' } },
-    'trench': { name: "망각의 데이터 해구", bounds: { x:20, y:100, w:600, h:140 }, npcs: [ { id: 'archive', x: 200, y: 180, w: 20, h: 20, symbol: 'A', color: '#88aaff', defeated: false }, { id: 'jester', x: 450, y: 130, w: 16, h: 16, symbol: '?', color: '#cc00ff', defeated: false } ], portal: { x: 580, y: 160, w: 20, h: 40, active: false, to: 'sanctum' } },
-    'sanctum': { name: "커널의 성소", bounds: { x:150, y:80, w:340, h:180 }, npcs: [{ id: 'kernel', x: 320, y: 150, w: 18, h: 18, symbol: 'K', color: '#ff4444', defeated: false }], portal: { active: false } }
+    'trench': { name: "망각의 데이터 해구", bounds: { x:20, y:100, w:600, h:140 }, npcs: [ { id: 'archive', x: 200, y: 180, w: 20, h: 20, symbol: 'A', color: '#88aaff', defeated: false }, { id: 'jester', x: 450, y: 130, w: 16, h: 16, symbol: '?', color: '#cc00ff', defeated: false }, { id: 'shopkeeper2', x: 80, y: 160, w: 16, h: 16, symbol: '$', color: '#ffff00', defeated: false, isShop: true } ], portal: { x: 580, y: 160, w: 20, h: 40, active: false, to: 'sanctum' } },
+    'sanctum': { name: "커널의 성소", bounds: { x:150, y:80, w:340, h:180 }, npcs: [{ id: 'kernel', x: 320, y: 150, w: 18, h: 18, symbol: 'K', color: '#ff4444', defeated: false }, { id: 'shopkeeper3', x: 210, y: 120, w: 16, h: 16, symbol: '$', color: '#ffff00', defeated: false, isShop: true }], portal: { active: false } }
   }
 };
 function worldInit(fullReset = true) {
