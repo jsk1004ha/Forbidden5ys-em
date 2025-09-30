@@ -425,16 +425,24 @@ function battleUpdate(dt) {
     case "quote_result":
       // 대사 표시 후 플레이어의 확인 기다리기
       if (pressed(["z","Z","Enter"])) {
+        // 상태 전환 전에 키 상태 초기화 - 중요!
+        clearConfirmKeys();
+        
         bgmManager.stopAll();
         if(battle.currentBossId === 'kernel' && G.endingState.kills === 0) {
             G.state = 'intermission';
-            setTimeout(() => startBattle('anomaly'), 2000);
+            setTimeout(() => {
+              startBattle('anomaly');
+              // 타이머 완료 후 키 상태 한번 더 초기화
+              clearConfirmKeys();
+            }, 2000);
         } else if (battle.currentBossId === 'anomaly') {
             G.state = 'ending';
+            // anomaly 전투 후 엔딩으로 전환 시 키 상태 추가 초기화
+            clearConfirmKeys();
         } else {
             G.state = "overworld";
         }
-        clearConfirmKeys();
       }
       break;
   }
@@ -631,6 +639,7 @@ function loop() {
     const allBosses = Object.values(world.stages).flatMap(s => s.npcs);
     if (allBosses.every(n => n.defeated) && G.endingState.kills > 0) {
       G.state = 'ending';
+      clearConfirmKeys(); // 엔딩 상태로 전환 시 키 상태 초기화
       endDraw();
     } else {
       worldUpdate(dt); worldDraw();
@@ -705,7 +714,21 @@ function titleDraw() {
   const unlockedCount = Object.values(endings).filter(Boolean).length;
   drawText(`기억 복원율: ${unlockedCount}/3`, 10, G.height-20, '#888', 'left', 12);
 }
+// 엔딩 상태 관리를 위한 변수
+const endingStateManager = {
+    lastState: null,
+    checkStateChange: function() {
+        if (this.lastState !== G.state && (G.state === 'ending' || G.state === 'revelation')) {
+            clearConfirmKeys();
+            this.lastState = G.state;
+        }
+    }
+};
+
 function endDraw() {
+    // 엔딩이 시작될 때 키 입력 상태를 초기화
+    endingStateManager.checkStateChange();
+    
     bgmManager.stopAll();
     let endingType;
     if (G.state === 'lose') {
@@ -770,6 +793,8 @@ function endDraw() {
         if (pressed(["z","Z","Enter"])) {
             G.state = "title";
             beep("square",600,0.08,0.04);
+            // 타이틀로 전환 시 키 상태 초기화 추가
+            clearConfirmKeys();
         }
     }
 }
