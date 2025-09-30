@@ -353,9 +353,9 @@ function battleReset() {
   battle.player.hp = G.player.hp; // 전투 시작 시 HP는 G.player의 현재 HP
   battle.ui.mainIndex = 0; battle.ui.listIndex = 0; battle.ui.msgTimer = 120; battle.ui.shuffleMap = null;
   battle.atk.active = false; battle.bullets = []; G.particles = []; battle.waveIndex = -1; battle.waveTime = 0; battle.waveState = null;
-  battle.soul.x = 320; battle.soul.y = 210; battle.soul.invul = 0;
+  battle.soul.x = 320; battle.soul.y = 180; battle.soul.invul = 0;
   battle.box.w = battle.box.targetW = 280; battle.box.h = battle.box.targetH = 120;
-  battle.box.x = 180; battle.box.y = 150;
+  battle.box.x = 180; battle.box.y = 120;
 }
 
 function battleUpdate(dt) {
@@ -430,19 +430,21 @@ function battleDraw() {
   }
   ctx.restore();
 
-  drawFrame(20, G.height-90, G.width-40, 70);
-  drawText(`LV ${G.player.lv}  AUDITOR  HP ${G.player.hp}/${G.player.hpMax}`, 28, G.height-110, "#0ff", "left", 14);
-  drawText(`G: ${G.player.gold}`, G.width - 100, G.height-110, "#ff0", "right", 14);
-  ctx.fillStyle="#333"; ctx.fillRect(180, G.height-107, 200, 8);
+  drawFrame(20, G.height-100, G.width-40, 80); // Main battle frame
+  drawText(`LV ${G.player.lv}  AUDITOR  HP ${G.player.hp}/${G.player.hpMax}`, 28, G.height-120, "#0ff", "left", 14);
+  drawText(`G: ${G.player.gold}`, G.width - 100, G.height-120, "#ff0", "right", 14);
+  ctx.fillStyle="#333"; ctx.fillRect(240, G.height-117, 200, 8);
   ctx.fillStyle="#0ff"; const hpw = 200 * (G.player.hp / G.player.hpMax);
-  ctx.fillRect(180, G.height-107, Math.max(0, hpw), 8);
+  ctx.fillRect(240, G.height-117, Math.max(0, hpw), 8);
 
   if (battle.phase === "menu") menuDraw();
   else if (battle.phase === "attack_timing") attackTimingDraw();
   else if (battle.phase === "enemy_turn") enemyTurnDraw();
   
   const line = battle.ui.msg[0] || "";
-  drawText(line, 30, G.height-82, "#fff", "left", 16);
+  if (battle.phase !== 'menu' || (battle.sub !== 'menu_item' && battle.sub !== 'menu_act')) {
+    drawText(line, 30, G.height-80, "#fff", "left", 16);
+  }
 }
 
 function checkLevelUp() {
@@ -525,13 +527,13 @@ function menuDraw() {
   for (let i=0;i<labels.length;i++) {
     const label = labels[menuOrder[i]];
     const sel = (battle.ui.mainIndex===i && battle.sub==="menu_main");
-    drawText(label, x0 + i*gap, G.height-120, sel ? "#ff0" : "#fff", "left", 18);
+    drawText(label, x0 + i*gap, G.height-40, sel ? "#ff0" : "#fff", "left", 18);
   }
   if (battle.sub === "menu_act") {
     const acts = battle.currentBossData.actOptions.map(a => a.name);
     for (let i=0;i<acts.length;i++) {
       const sel = battle.ui.listIndex===i;
-      drawText((sel?"> ":"  ")+acts[i], 40, G.height-80 + i*18, sel ? "#0f0" : "#fff", "left", 16);
+      drawText((sel?"> ":"  ")+acts[i], 40, G.height-80 + i*20, sel ? "#0f0" : "#fff", "left", 16);
     }
   }
   if (battle.sub === "menu_item") {
@@ -540,7 +542,7 @@ function menuDraw() {
       for (let i=0;i<G.player.inv.length;i++) {
         const item = G.player.inv[i];
         const sel = battle.ui.listIndex===i;
-        drawText((sel?"> ":"  ")+`${item.name}`, 40, G.height-80 + i*18, sel ? "#0f0" : "#fff", "left", 16);
+        drawText((sel?"> ":"  ")+`${item.name}`, 40, G.height-80 + i*20, sel ? "#0f0" : "#fff", "left", 16);
       }
     }
   }
@@ -548,9 +550,9 @@ function menuDraw() {
 
 function startAttackTiming() { battle.phase = "attack_timing"; battle.atk.active = true; battle.atk.pointer = battle.atk.barX; battle.atk.dir = 1; pushMsg("타이밍에 맞춰 Z!"); }
 function attackTimingUpdate(dt) { const a = battle.atk; a.pointer += a.dir * 3.2 * dt * 60; if (a.pointer <= a.barX) a.dir = 1; if (a.pointer >= a.barX + a.barW) a.dir = -1; if (pressed(["z","Z","Enter"])) { const d = Math.abs(a.pointer - a.zoneX); let dmg = (d < a.zoneW*0.5) ? 12 : (d < a.zoneW) ? 9 : (d < a.zoneW*1.8) ? 6 : 3; const atkBuff = G.player.buffs.find(b => b.type === 'atk'); if (atkBuff) { dmg += atkBuff.power; } battle.enemy.hp = Math.max(0, battle.enemy.hp - dmg); G.shakeT=5; spawnParticles(G.width/2, 100, 10, {color:'#fff', speed:3}); beep("square", 220 + 20*dmg, 0.07, 0.03); pushMsg(`공격! ${dmg}의 데미지.`); if (battle.enemy.hp<=0) { battle.enemy.alive = false; battle.phase = "result"; G.flashT=10; spawnParticles(G.width/2, 100, 50, {color:'#f00', speed:5}); return; } endPlayerTurn(); } }
-function attackTimingDraw() { const bx = battle.atk.barX, by = G.height-84; drawRect(bx, by, battle.atk.barW, 8, "#444"); drawRect(battle.atk.zoneX - battle.atk.zoneW/2, by-2, battle.atk.zoneW, 12, "#ff0", false, 2); drawRect(battle.atk.pointer-2, by-6, 4, 20, "#fff"); }
+function attackTimingDraw() { const bx = battle.atk.barX, by = G.height-60; drawRect(bx, by, battle.atk.barW, 8, "#444"); drawRect(battle.atk.zoneX - battle.atk.zoneW/2, by-2, battle.atk.zoneW, 12, "#ff0", false, 2); drawRect(battle.atk.pointer-2, by-6, 4, 20, "#fff"); }
 function endPlayerTurn() { battle.phase = "enemy_turn"; battle.waveTime = 0; battle.bullets.length = 0; battle.soul.invul = Math.max(0, battle.soul.invul); const patternCount = battle.currentBossData.attackPatterns.length; battle.waveIndex = (battle.waveIndex + 1) % patternCount; battle.ui.shuffleMap = null; battle.waveState=null; G.player.buffs.forEach(b => { b.duration--; }); G.player.buffs = G.player.buffs.filter(b => b.duration > 0); }
-function enemyTurnUpdate(dt) { const b = battle.box, s = battle.soul, sp = s.speed * dt * 60; b.w += (b.targetW - b.w) * 0.1; b.h += (b.targetH - b.h) * 0.1; b.x = G.width/2 - b.w/2; b.y = 150; let vx=0, vy=0; if (pressed(["ArrowLeft"])) vx -= 1; if (pressed(["ArrowRight"])) vx += 1; if (pressed(["ArrowUp"])) vy -= 1; if (pressed(["ArrowDown"])) vy += 1; s.x = clamp(s.x + vx*sp, b.x + s.r, b.x + b.w - s.r); s.y = clamp(s.y + vy*sp, b.y + s.r, b.y + b.h - s.r); battle.waveTime += dt; battle.currentBossData.attackPatterns[battle.waveIndex](battle.waveTime, dt, battle); for (let i = battle.bullets.length - 1; i >= 0; i--) { const bu = battle.bullets[i]; bu.x += (bu.vx || 0) * dt * 60; bu.y += (bu.vy || 0) * dt * 60; if(bu.update) bu.update(bu, dt, battle); if (bu.x<-20 || bu.x>G.width+20 || bu.y<-20 || bu.y>G.height+20) bu.dead = true; if(bu.dead) { if(bu.color) spawnParticles(bu.x, bu.y, 3, {color:bu.color, life:0.2, speed:1}); battle.bullets.splice(i, 1); continue; } const dx = bu.x - s.x, dy = bu.y - s.y; if (dx*dx + dy*dy < (s.r + bu.r)*(s.r + bu.r) && s.invul <= 0) { takeDamage(bu.dmg||3); s.invul = 1.0; G.shakeT = 10; spawnParticles(s.x, s.y, 20, {color:'#f00', life:0.4, speed:2}); } } if (s.invul>0) s.invul -= dt; if ((battle.waveTime > 6.5 && battle.currentBossId !== 'anomaly') || (battle.waveTime > 8.5 && battle.currentBossId === 'anomaly') || battle.player.hp<=0) { if (battle.player.hp<=0) G.state = "lose"; else { battle.phase = "menu"; battle.sub = "menu_main"; pushMsg("당신의 턴이다."); } b.targetW = 280; b.targetH = 120; } }
+function enemyTurnUpdate(dt) { const b = battle.box, s = battle.soul, sp = s.speed * dt * 60; b.w += (b.targetW - b.w) * 0.1; b.h += (b.targetH - b.h) * 0.1; b.x = G.width/2 - b.w/2; b.y = 120; let vx=0, vy=0; if (pressed(["ArrowLeft"])) vx -= 1; if (pressed(["ArrowRight"])) vx += 1; if (pressed(["ArrowUp"])) vy -= 1; if (pressed(["ArrowDown"])) vy += 1; s.x = clamp(s.x + vx*sp, b.x + s.r, b.x + b.w - s.r); s.y = clamp(s.y + vy*sp, b.y + s.r, b.y + b.h - s.r); battle.waveTime += dt; battle.currentBossData.attackPatterns[battle.waveIndex](battle.waveTime, dt, battle); for (let i = battle.bullets.length - 1; i >= 0; i--) { const bu = battle.bullets[i]; bu.x += (bu.vx || 0) * dt * 60; bu.y += (bu.vy || 0) * dt * 60; if(bu.update) bu.update(bu, dt, battle); if (bu.x<-20 || bu.x>G.width+20 || bu.y<-20 || bu.y>G.height+20) bu.dead = true; if(bu.dead) { if(bu.color) spawnParticles(bu.x, bu.y, 3, {color:bu.color, life:0.2, speed:1}); battle.bullets.splice(i, 1); continue; } const dx = bu.x - s.x, dy = bu.y - s.y; if (dx*dx + dy*dy < (s.r + bu.r)*(s.r + bu.r) && s.invul <= 0) { takeDamage(bu.dmg||3); s.invul = 1.0; G.shakeT = 10; spawnParticles(s.x, s.y, 20, {color:'#f00', life:0.4, speed:2}); } } if (s.invul>0) s.invul -= dt; if ((battle.waveTime > 6.5 && battle.currentBossId !== 'anomaly') || (battle.waveTime > 8.5 && battle.currentBossId === 'anomaly') || battle.player.hp<=0) { if (battle.player.hp<=0) G.state = "lose"; else { battle.phase = "menu"; battle.sub = "menu_main"; pushMsg("당신의 턴이다."); } b.targetW = 280; b.targetH = 120; } }
 function enemyTurnDraw() { const b = battle.box; drawFrame(b.x, b.y, b.w, b.h, "#fff"); const s = battle.soul; ctx.save(); if (s.invul>0) ctx.globalAlpha = 0.5 + 0.5*Math.sin(now()/50); drawRect(s.x - s.r, s.y - s.r, s.r*2, s.r*2, "#f00"); ctx.restore(); for (const bu of battle.bullets) { if(bu.text) drawCenterText(bu.text, bu.x, bu.y, bu.color||'#fff', bu.r*4); else drawRect(bu.x - bu.r, bu.y - bu.r, bu.r*2, bu.r*2, bu.color||"#fff"); } if (battle.currentBossId === 'kernel' && battle.waveIndex === 1 && battle.waveState && battle.waveState.sweeps) { battle.waveState.sweeps.forEach(s => { const p = s.dir > 0 ? s.p : 1 - s.p; const pos = s.isV ? b.x + b.w * p : b.y + b.h * p; const color = s.warning > 0 ? `rgba(255,100,100,${0.5 * (1 - s.warning / 0.8)})` : 'rgba(255, 80, 80, 0.9)'; const thickness = s.warning > 0 ? 2 : 4; drawRect(s.isV ? pos : b.x, s.isV ? b.y : pos, s.isV ? thickness : b.w, s.isV ? b.h : thickness, color); }); } }
 function takeDamage(dmg) { battle.player.hp = Math.max(0, battle.player.hp - dmg); beep("triangle",160,0.08,0.04); pushMsg(`HIT! -${dmg} HP`); if (battle.player.hp<=0) { G.flashT=15; G.state = "lose"; } }
 
