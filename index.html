@@ -248,6 +248,9 @@ function worldUpdate(dt) {
   const sp = world.player.speed * dt * 60;
   world.player.x = clamp(world.player.x + vx*sp, stage.bounds.x, stage.bounds.x + stage.bounds.w - world.player.w);
   world.player.y = clamp(world.player.y + vy*sp, stage.bounds.y, stage.bounds.y + stage.bounds.h - world.player.h);
+  
+  // 디버깅 표시 (일시적)
+  // drawText(`포탈 활성화: ${stage.portal ? stage.portal.active : 'N/A'}`, 20, 20, "#fff");
 
   for(const n of stage.npcs) {
     if (n.defeated && !n.isShop) continue;
@@ -276,6 +279,7 @@ function worldUpdate(dt) {
         beep("triangle", 880, 0.1, 0.04);
         G.currentStage = port.to;
         world.player.x = 80; world.player.y = 180;
+        clearConfirmKeys(); // 키 상태 초기화하여 중복 입력 방지
     }
   }
 }
@@ -292,6 +296,12 @@ function worldDraw() {
   drawBackground(G.currentStage);
   drawFrame(40,40, G.width-80, G.height-140, "#fff");
   drawCenterText(stage.name, G.width/2, 25, "#fff", 14);
+  
+  // 디버깅 정보를 텍스트로 표시 (필요 시 주석 해제)
+  // const combatNpcs = stage.npcs.filter(n => !n.isShop);
+  // const defeatedInfo = combatNpcs.map(n => `${n.id}: ${n.defeated ? '처치됨' : '안됨'}`).join(', ');
+  // drawText(`포탈 상태: ${stage.portal ? (stage.portal.active ? '활성화' : '비활성화') : '없음'}`, 50, 50, "#ff0", "left", 12);
+  // drawText(`전투 NPC 상태: ${defeatedInfo}`, 50, 65, "#ff0", "left", 12);
 
   for(const n of stage.npcs) {
     ctx.globalAlpha = n.defeated ? 0.3 : 1;
@@ -396,7 +406,8 @@ function battleUpdate(dt) {
       const npc = stage.npcs.find(n=>n.id === battle.currentBossId);
       if(npc) npc.defeated = true;
       
-      const allDefeatedInStage = stage.npcs.every(n => n.defeated);
+      // 전투 대상 NPC만 필터링하여 모두 defeated 상태인지 확인 (상점 NPC 제외)
+      const allDefeatedInStage = stage.npcs.filter(n => !n.isShop).every(n => n.defeated);
       if(allDefeatedInStage && stage.portal) stage.portal.active = true;
 
       bgmManager.stopAll();
