@@ -73,6 +73,16 @@ const G = {
   currentStage: 'gateway',
   endingState: { kills: 0, spares: 0 },
   particles: [],
+  player: {
+    lv: 1,
+    exp: 0,
+    expNext: 10,
+    gold: 0,
+    hp: 20,
+    hpMax: 20,
+    inv: [],
+    buffs: []
+  },
 };
 
 // ------------------------------------------------------------
@@ -185,10 +195,26 @@ function updateAndDrawParticles(dt) {
 // ------------------------------------------------------------
 // 오버월드 & 스테이지 관리
 // ------------------------------------------------------------
+const shop = {
+  isOpen: false,
+  items: [
+    { name: "데이터 조각", price: 30, heal: 20, desc: "HP를 20 회복한다." },
+    { name: "압축된 에너지", price: 50, heal: 40, desc: "HP를 40 회복한다." },
+    { name: "오버클럭 칩", price: 80, buff: { type: 'atk', power: 3, duration: 3 }, desc: "3턴간 공격력을 3 증가시킨다." },
+    { name: "망가진 코어", price: 150, buff: { type: 'atk', power: 10, duration: 1 }, desc: "다음 1턴간 공격력을 10 증가시킨다." },
+    { name: "의지의 파편", price: 250, special: 'genocide_only', desc: "강한 자만이 다룰 수 있는 힘의 파편." }
+  ],
+  selectedIndex: 0,
+  msg: ""
+};
+
 const world = {
   player: { x: 80, y: 180, w: 12, h: 14, speed: 1.2 },
   stages: {
-    'gateway': { name: "손상된 게이트웨이", bounds: { x:20, y:20, w:600, h:220 }, npcs: [{ id: 'sentinel', x: 320, y: 150, w: 16, h: 16, symbol: 'S', color: '#ff6600', defeated: false }], portal: { x: 580, y: 150, w: 20, h: 40, active: false, to: 'trench' } },
+    'gateway': { name: "손상된 게이트웨이", bounds: { x:20, y:20, w:600, h:220 }, npcs: [
+      { id: 'sentinel', x: 320, y: 150, w: 16, h: 16, symbol: 'S', color: '#ff6600', defeated: false },
+      { id: 'shopkeeper', x: 150, y: 100, w: 16, h: 16, symbol: '$', color: '#ffff00', defeated: false, isShop: true }
+    ], portal: { x: 580, y: 150, w: 20, h: 40, active: false, to: 'trench' } },
     'trench': { name: "망각의 데이터 해구", bounds: { x:20, y:100, w:600, h:140 }, npcs: [ { id: 'archive', x: 200, y: 180, w: 20, h: 20, symbol: 'A', color: '#88aaff', defeated: false }, { id: 'jester', x: 450, y: 130, w: 16, h: 16, symbol: '?', color: '#cc00ff', defeated: false } ], portal: { x: 580, y: 160, w: 20, h: 40, active: false, to: 'sanctum' } },
     'sanctum': { name: "커널의 성소", bounds: { x:150, y:80, w:340, h:180 }, npcs: [{ id: 'kernel', x: 320, y: 150, w: 18, h: 18, symbol: 'K', color: '#ff4444', defeated: false }], portal: { active: false } }
   }
@@ -197,7 +223,16 @@ function worldInit(fullReset = true) {
   G.currentStage = 'gateway';
   world.player.x = 80; world.player.y = 180;
   G.endingState = { kills: 0, spares: 0 };
+
   if (fullReset) {
+    G.player.lv = 1;
+    G.player.exp = 0;
+    G.player.expNext = 10;
+    G.player.gold = 0;
+    G.player.hpMax = 20;
+    G.player.hp = G.player.hpMax;
+    G.player.inv = [{name:"복구 디스크", heal:10, desc:"HP를 10 회복한다."}, {name:"에너지 드링크", heal:6, desc:"HP를 6 회복한다."}];
+
     for (const stageKey in world.stages) {
       const stage = world.stages[stageKey];
       stage.npcs.forEach(n => n.defeated = false);
@@ -215,13 +250,22 @@ function worldUpdate(dt) {
   world.player.y = clamp(world.player.y + vy*sp, stage.bounds.y, stage.bounds.y + stage.bounds.h - world.player.h);
 
   for(const n of stage.npcs) {
-    if (n.defeated) continue;
+    if (n.defeated && !n.isShop) continue;
     const p = world.player;
     const hit = !(p.x+p.w < n.x || n.x+n.w < p.x || p.y+p.h < n.y || n.y+n.h < p.y);
     if (hit && pressed(["z","Z","Enter"])) {
-      beep("square",660,0.08,0.03);
-      startBattle(n.id);
-      return;
+      if (n.isShop) {
+        G.state = 'shop';
+        shop.isOpen = true;
+        shop.msg = "어서오세요, 감사관님. 필요한 게 있으신가요?";
+        shop.selectedIndex = 0;
+        clearConfirmKeys();
+        return;
+      } else {
+        beep("square",660,0.08,0.03);
+        startBattle(n.id);
+        return;
+      }
     }
   }
 
@@ -264,7 +308,8 @@ function worldDraw() {
   }
 
   drawRect(world.player.x, world.player.y, world.player.w, world.player.h, "#0ff");
-  drawText("AUDITOR", world.player.x-14, world.player.y-16, "#0ff", "left", 12);
+  drawText(`LV:${G.player.lv} AUDITOR`, world.player.x-24, world.player.y-16, "#0ff", "left", 12);
+  drawText(`G: ${G.player.gold}`, G.width - 100, 10, "#ff0", "right", 14);
 
   drawFrame(20, G.height-90, G.width-40, 70);
   const allDefeated = stage.npcs.every(n => n.defeated);
@@ -278,7 +323,7 @@ function worldDraw() {
 const battle = {
   phase: "intro", sub: "menu_main",
   enemy: { name: "", hp: 0, hpMax: 0, mercyStat: 0, mercyMax: 0, mercyName: "", spareThreshold: 0, alive: true },
-  player: { hp: 20, hpMax: 20, inv: [] },
+  player: G.player,
   ui: { mainIndex: 0, listIndex: 0, msg: [], msgTimer: 0, shuffleMap: null },
   atk: { t: 0, active:false, zoneX: 320, zoneW: 30, barX: 160, barW: 320, dir: 1, pointer: 160 },
   box: { x: 180, y: 150, w: 280, h: 120, targetW: 280, targetH: 120 },
@@ -304,8 +349,8 @@ function startBattle(bossId) {
 
 function battleReset() {
   battle.phase = "intro"; battle.sub = "menu_main"; battle.enemy.alive = true;
-  battle.player.hp = battle.player.hpMax = 20;
-  battle.player.inv = [{name:"복구 디스크", heal:10}, {name:"에너지 드링크", heal:6}];
+  battle.player = G.player; // G.player를 참조하도록 변경
+  battle.player.hp = G.player.hp; // 전투 시작 시 HP는 G.player의 현재 HP
   battle.ui.mainIndex = 0; battle.ui.listIndex = 0; battle.ui.msgTimer = 120; battle.ui.shuffleMap = null;
   battle.atk.active = false; battle.bullets = []; G.particles = []; battle.waveIndex = -1; battle.waveTime = 0; battle.waveState = null;
   battle.soul.x = 320; battle.soul.y = 210; battle.soul.invul = 0;
@@ -330,7 +375,22 @@ function battleUpdate(dt) {
     case "result":
       const spared = battle.enemy.mercyStat <= battle.enemy.spareThreshold;
       const killed = battle.enemy.hp <= 0;
-      if (spared) G.endingState.spares++; else if (killed) G.endingState.kills++;
+      if (spared) {
+        G.endingState.spares++;
+        pushMsg("자비를 베풀어 20G를 얻었다.");
+        G.player.gold += 20;
+        if (battle.currentBossId === 'jester') {
+            G.player.inv.push({ name: "광대의 가면", desc: "장난스러운 에너지가 느껴진다.", special: true });
+            pushMsg("광대의 가면을 얻었다!");
+        }
+      } else if (killed) {
+        G.endingState.kills++;
+        const data = battle.currentBossData;
+        G.player.exp += data.exp;
+        G.player.gold += data.gold;
+        pushMsg(`승리! ${data.exp} EXP와 ${data.gold}G를 얻었다.`);
+        checkLevelUp();
+      }
       
       const stage = world.stages[G.currentStage];
       const npc = stage.npcs.find(n=>n.id === battle.currentBossId);
@@ -371,9 +431,10 @@ function battleDraw() {
   ctx.restore();
 
   drawFrame(20, G.height-90, G.width-40, 70);
-  drawText(`AUDITOR  HP ${battle.player.hp}/${battle.player.hpMax}`, 28, G.height-110, "#0ff", "left", 14);
+  drawText(`LV ${G.player.lv}  AUDITOR  HP ${G.player.hp}/${G.player.hpMax}`, 28, G.height-110, "#0ff", "left", 14);
+  drawText(`G: ${G.player.gold}`, G.width - 100, G.height-110, "#ff0", "right", 14);
   ctx.fillStyle="#333"; ctx.fillRect(180, G.height-107, 200, 8);
-  ctx.fillStyle="#0ff"; const hpw = 200 * (battle.player.hp / battle.player.hpMax);
+  ctx.fillStyle="#0ff"; const hpw = 200 * (G.player.hp / G.player.hpMax);
   ctx.fillRect(180, G.height-107, Math.max(0, hpw), 8);
 
   if (battle.phase === "menu") menuDraw();
@@ -382,6 +443,19 @@ function battleDraw() {
   
   const line = battle.ui.msg[0] || "";
   drawText(line, 30, G.height-82, "#fff", "left", 16);
+}
+
+function checkLevelUp() {
+  if (G.endingState.kills === 0) return; // 불살 루트에서는 레벨업 불가
+  while (G.player.exp >= G.player.expNext) {
+    G.player.lv++;
+    G.player.exp -= G.player.expNext;
+    G.player.expNext = Math.floor(G.player.expNext * 1.5);
+    G.player.hpMax += 5;
+    G.player.hp = G.player.hpMax; // 레벨업 시 체력 완전 회복
+    beep("triangle", 1200, 0.2, 0.05);
+    // TODO: 레벨업 효과 표시
+  }
 }
 
 function pushMsg(s, dur=90) { 
@@ -427,11 +501,16 @@ function menuUpdate() {
               battle.currentBossData.actOptions[ui.listIndex].handler(battle);
               endPlayerTurn();
           } else {
-              if (battle.player.inv.length === 0) { pushMsg("사용할 아이템이 없다."); endPlayerTurn(); } 
+              if (G.player.inv.length === 0) { pushMsg("사용할 아이템이 없다."); endPlayerTurn(); } 
               else {
-                  const it = battle.player.inv.splice(ui.listIndex,1)[0];
-                  battle.player.hp = Math.min(battle.player.hpMax, battle.player.hp + it.heal);
-                  pushMsg(`${it.name}을 사용! HP +${it.heal}`);
+                  const item = G.player.inv.splice(ui.listIndex,1)[0];
+                  if (item.heal) {
+                    G.player.hp = Math.min(G.player.hpMax, G.player.hp + item.heal);
+                    pushMsg(`${item.name}을 사용! HP +${item.heal}`);
+                  } else if (item.buff) {
+                    G.player.buffs.push(JSON.parse(JSON.stringify(item.buff))); // Deep copy
+                    pushMsg(`${item.name}을 사용! ${item.desc}`);
+                  }
                   endPlayerTurn();
               }
           }
@@ -456,21 +535,21 @@ function menuDraw() {
     }
   }
   if (battle.sub === "menu_item") {
-    if (battle.player.inv.length===0) drawText("아이템 없음", 40, G.height-80, "#fff", "left", 16);
+    if (G.player.inv.length===0) drawText("아이템 없음", 40, G.height-80, "#fff", "left", 16);
     else {
-      for (let i=0;i<battle.player.inv.length;i++) {
-        const item = battle.player.inv[i];
+      for (let i=0;i<G.player.inv.length;i++) {
+        const item = G.player.inv[i];
         const sel = battle.ui.listIndex===i;
-        drawText((sel?"> ":"  ")+`${item.name} (HP+${item.heal})`, 40, G.height-80 + i*18, sel ? "#0f0" : "#fff", "left", 16);
+        drawText((sel?"> ":"  ")+`${item.name}`, 40, G.height-80 + i*18, sel ? "#0f0" : "#fff", "left", 16);
       }
     }
   }
 }
 
 function startAttackTiming() { battle.phase = "attack_timing"; battle.atk.active = true; battle.atk.pointer = battle.atk.barX; battle.atk.dir = 1; pushMsg("타이밍에 맞춰 Z!"); }
-function attackTimingUpdate(dt) { const a = battle.atk; a.pointer += a.dir * 3.2 * dt * 60; if (a.pointer <= a.barX) a.dir = 1; if (a.pointer >= a.barX + a.barW) a.dir = -1; if (pressed(["z","Z","Enter"])) { const d = Math.abs(a.pointer - a.zoneX); let dmg = (d < a.zoneW*0.5) ? 12 : (d < a.zoneW) ? 9 : (d < a.zoneW*1.8) ? 6 : 3; battle.enemy.hp = Math.max(0, battle.enemy.hp - dmg); G.shakeT=5; spawnParticles(G.width/2, 100, 10, {color:'#fff', speed:3}); beep("square", 220 + 20*dmg, 0.07, 0.03); pushMsg(`공격! ${dmg}의 데미지.`); if (battle.enemy.hp<=0) { battle.enemy.alive = false; battle.phase = "result"; G.flashT=10; spawnParticles(G.width/2, 100, 50, {color:'#f00', speed:5}); return; } endPlayerTurn(); } }
+function attackTimingUpdate(dt) { const a = battle.atk; a.pointer += a.dir * 3.2 * dt * 60; if (a.pointer <= a.barX) a.dir = 1; if (a.pointer >= a.barX + a.barW) a.dir = -1; if (pressed(["z","Z","Enter"])) { const d = Math.abs(a.pointer - a.zoneX); let dmg = (d < a.zoneW*0.5) ? 12 : (d < a.zoneW) ? 9 : (d < a.zoneW*1.8) ? 6 : 3; const atkBuff = G.player.buffs.find(b => b.type === 'atk'); if (atkBuff) { dmg += atkBuff.power; } battle.enemy.hp = Math.max(0, battle.enemy.hp - dmg); G.shakeT=5; spawnParticles(G.width/2, 100, 10, {color:'#fff', speed:3}); beep("square", 220 + 20*dmg, 0.07, 0.03); pushMsg(`공격! ${dmg}의 데미지.`); if (battle.enemy.hp<=0) { battle.enemy.alive = false; battle.phase = "result"; G.flashT=10; spawnParticles(G.width/2, 100, 50, {color:'#f00', speed:5}); return; } endPlayerTurn(); } }
 function attackTimingDraw() { const bx = battle.atk.barX, by = G.height-84; drawRect(bx, by, battle.atk.barW, 8, "#444"); drawRect(battle.atk.zoneX - battle.atk.zoneW/2, by-2, battle.atk.zoneW, 12, "#ff0", false, 2); drawRect(battle.atk.pointer-2, by-6, 4, 20, "#fff"); }
-function endPlayerTurn() { battle.phase = "enemy_turn"; battle.waveTime = 0; battle.bullets.length = 0; battle.soul.invul = Math.max(0, battle.soul.invul); const patternCount = battle.currentBossData.attackPatterns.length; battle.waveIndex = (battle.waveIndex + 1) % patternCount; battle.ui.shuffleMap = null; battle.waveState=null; }
+function endPlayerTurn() { battle.phase = "enemy_turn"; battle.waveTime = 0; battle.bullets.length = 0; battle.soul.invul = Math.max(0, battle.soul.invul); const patternCount = battle.currentBossData.attackPatterns.length; battle.waveIndex = (battle.waveIndex + 1) % patternCount; battle.ui.shuffleMap = null; battle.waveState=null; G.player.buffs.forEach(b => { b.duration--; }); G.player.buffs = G.player.buffs.filter(b => b.duration > 0); }
 function enemyTurnUpdate(dt) { const b = battle.box, s = battle.soul, sp = s.speed * dt * 60; b.w += (b.targetW - b.w) * 0.1; b.h += (b.targetH - b.h) * 0.1; b.x = G.width/2 - b.w/2; b.y = 150; let vx=0, vy=0; if (pressed(["ArrowLeft"])) vx -= 1; if (pressed(["ArrowRight"])) vx += 1; if (pressed(["ArrowUp"])) vy -= 1; if (pressed(["ArrowDown"])) vy += 1; s.x = clamp(s.x + vx*sp, b.x + s.r, b.x + b.w - s.r); s.y = clamp(s.y + vy*sp, b.y + s.r, b.y + b.h - s.r); battle.waveTime += dt; battle.currentBossData.attackPatterns[battle.waveIndex](battle.waveTime, dt, battle); for (let i = battle.bullets.length - 1; i >= 0; i--) { const bu = battle.bullets[i]; bu.x += (bu.vx || 0) * dt * 60; bu.y += (bu.vy || 0) * dt * 60; if(bu.update) bu.update(bu, dt, battle); if (bu.x<-20 || bu.x>G.width+20 || bu.y<-20 || bu.y>G.height+20) bu.dead = true; if(bu.dead) { if(bu.color) spawnParticles(bu.x, bu.y, 3, {color:bu.color, life:0.2, speed:1}); battle.bullets.splice(i, 1); continue; } const dx = bu.x - s.x, dy = bu.y - s.y; if (dx*dx + dy*dy < (s.r + bu.r)*(s.r + bu.r) && s.invul <= 0) { takeDamage(bu.dmg||3); s.invul = 1.0; G.shakeT = 10; spawnParticles(s.x, s.y, 20, {color:'#f00', life:0.4, speed:2}); } } if (s.invul>0) s.invul -= dt; if ((battle.waveTime > 6.5 && battle.currentBossId !== 'anomaly') || (battle.waveTime > 8.5 && battle.currentBossId === 'anomaly') || battle.player.hp<=0) { if (battle.player.hp<=0) G.state = "lose"; else { battle.phase = "menu"; battle.sub = "menu_main"; pushMsg("당신의 턴이다."); } b.targetW = 280; b.targetH = 120; } }
 function enemyTurnDraw() { const b = battle.box; drawFrame(b.x, b.y, b.w, b.h, "#fff"); const s = battle.soul; ctx.save(); if (s.invul>0) ctx.globalAlpha = 0.5 + 0.5*Math.sin(now()/50); drawRect(s.x - s.r, s.y - s.r, s.r*2, s.r*2, "#f00"); ctx.restore(); for (const bu of battle.bullets) { if(bu.text) drawCenterText(bu.text, bu.x, bu.y, bu.color||'#fff', bu.r*4); else drawRect(bu.x - bu.r, bu.y - bu.r, bu.r*2, bu.r*2, bu.color||"#fff"); } if (battle.currentBossId === 'kernel' && battle.waveIndex === 1 && battle.waveState && battle.waveState.sweeps) { battle.waveState.sweeps.forEach(s => { const p = s.dir > 0 ? s.p : 1 - s.p; const pos = s.isV ? b.x + b.w * p : b.y + b.h * p; const color = s.warning > 0 ? `rgba(255,100,100,${0.5 * (1 - s.warning / 0.8)})` : 'rgba(255, 80, 80, 0.9)'; const thickness = s.warning > 0 ? 2 : 4; drawRect(s.isV ? pos : b.x, s.isV ? b.y : pos, s.isV ? thickness : b.w, s.isV ? b.h : thickness, color); }); } }
 function takeDamage(dmg) { battle.player.hp = Math.max(0, battle.player.hp - dmg); beep("triangle",160,0.08,0.04); pushMsg(`HIT! -${dmg} HP`); if (battle.player.hp<=0) { G.flashT=15; G.state = "lose"; } }
@@ -507,6 +586,7 @@ function loop() {
     }
   } 
   else if (G.state === "battle") { battleUpdate(dt); battleDraw(); }
+  else if (G.state === 'shop') { shopUpdate(); shopDraw(); }
   else if (G.state === 'intermission') {
     ctx.fillStyle="#000"; ctx.fillRect(0,0,G.width,G.height);
     drawCenterText("균열의 근원이 모습을 드러냅니다...", G.width/2, G.height/2, '#f0f');
@@ -516,6 +596,45 @@ function loop() {
   updateAndDrawParticles(dt);
   if(G.flashT > 0) { ctx.globalAlpha=G.flashT/15; drawRect(0,0,G.width,G.height,'#fff'); ctx.globalAlpha=1; }
   ctx.restore(); requestAnimationFrame(loop);
+}
+function shopUpdate() {
+  if (pressed(["ArrowUp"])) { shop.selectedIndex = (shop.selectedIndex + shop.items.length - 1) % shop.items.length; keys["ArrowUp"]=false; beep("square",520,0.05,0.02); shop.msg = shop.items[shop.selectedIndex].desc; }
+  if (pressed(["ArrowDown"])) { shop.selectedIndex = (shop.selectedIndex + 1) % shop.items.length; keys["ArrowDown"]=false; beep("square",520,0.05,0.02); shop.msg = shop.items[shop.selectedIndex].desc; }
+  if (pressed(["x","X"])) { G.state = "overworld"; shop.isOpen = false; keys["x"]=keys["X"]=false; }
+  if (pressed(["z","Z","Enter"])) {
+    const item = shop.items[shop.selectedIndex];
+    if (item.special === 'genocide_only' && G.endingState.kills === 0) {
+        shop.msg = "당신은 이 아이템을 다룰 수 없습니다.";
+        beep("triangle",330,0.08,0.03);
+    } else if (G.player.gold >= item.price) {
+      G.player.gold -= item.price;
+      G.player.inv.push(item);
+      shop.msg = `${item.name}을(를) 구매했습니다.`;
+      beep("sawtooth",760,0.05,0.02);
+    } else {
+      shop.msg = "골드가 부족합니다.";
+      beep("triangle",330,0.08,0.03);
+    }
+    clearConfirmKeys();
+  }
+}
+function shopDraw() {
+  ctx.fillStyle="#000"; ctx.fillRect(0,0,G.width,G.height);
+  drawFrame(20, 20, G.width - 40, G.height - 40);
+  drawCenterText("데이터 상점", G.width/2, 40, "#ff0", 20);
+  drawText(`소지금: ${G.player.gold}G`, G.width - 180, 45, "#ff0");
+
+  for (let i = 0; i < shop.items.length; i++) {
+    const item = shop.items[i];
+    const y = 80 + i * 30;
+    const selected = i === shop.selectedIndex;
+    drawText(`${selected ? '>' : ' '} ${item.name}`, 40, y, selected ? "#ff0" : "#fff", "left", 16);
+    drawText(`${item.price}G`, G.width - 100, y, selected ? "#ff0" : "#fff", "right", 16);
+  }
+
+  drawFrame(20, G.height - 100, G.width - 40, 80);
+  drawText(shop.msg, 40, G.height - 90, "#fff", "left", 14);
+  drawText("나가기: X", G.width - 100, G.height - 40, "#bbb", "right", 12);
 }
 function titleUpdate() { if (pressed(["z","Z","Enter"])) { worldInit(); G.state = "overworld"; beep("square",720,0.08,0.04); } }
 function titleDraw() {
