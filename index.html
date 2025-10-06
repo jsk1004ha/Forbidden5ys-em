@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="viewport" content="width=device-width, initial-scale-1.0"/>
 <title>Echoes of a Forgotten System | The Architect's Will</title>
 <style>
   html, body {
@@ -31,10 +31,10 @@
 
 <script>
 /* ===================================================================
-   ECHOES OF A FORGOTTEN SYSTEM (v3.6 - Final Logic Fix)
-   - 몰살/기본 루트 엔딩이 정상적으로 출력되도록 수정
-   - 불살 최종 보스의 자비 조건을 'HP 10 이하'로 변경
-   - 제공된 코드를 기반으로 모든 이전 버그 수정 사항 포함
+   ECHOES OF A FORGOTTEN SYSTEM (v3.5 - BGM Update)
+   - 보스별 BGM(배경 음악) 시스템 추가 (Track1.mp3 ~ Track5.mp3)
+   - BGM 비동기 로딩, 루프 재생, 에러 핸들링 기능 구현
+   - 모든 이전 버전의 버그 수정 사항 포함
    =================================================================== */
 
 const cvs = document.getElementById('game');
@@ -114,6 +114,7 @@ const bgmManager = {
         this.stopAll();
         if (this.tracks[trackId]) {
             this.tracks[trackId].play().catch(e => {
+                // Autoplay policy might block playback until user interaction
                 console.warn(`Could not play BGM '${trackId}':`, e.message);
             });
         }
@@ -247,6 +248,9 @@ function worldUpdate(dt) {
   const sp = world.player.speed * dt * 60;
   world.player.x = clamp(world.player.x + vx*sp, stage.bounds.x, stage.bounds.x + stage.bounds.w - world.player.w);
   world.player.y = clamp(world.player.y + vy*sp, stage.bounds.y, stage.bounds.y + stage.bounds.h - world.player.h);
+  
+  // 디버깅 표시 (일시적)
+  // drawText(`포탈 활성화: ${stage.portal ? stage.portal.active : 'N/A'}`, 20, 20, "#fff");
 
   for(const n of stage.npcs) {
     if (n.defeated && !n.isShop) continue;
@@ -275,7 +279,7 @@ function worldUpdate(dt) {
         beep("triangle", 880, 0.1, 0.04);
         G.currentStage = port.to;
         world.player.x = 80; world.player.y = 180;
-        clearConfirmKeys();
+        clearConfirmKeys(); // 키 상태 초기화하여 중복 입력 방지
     }
   }
 }
@@ -292,6 +296,12 @@ function worldDraw() {
   drawBackground(G.currentStage);
   drawFrame(40,40, G.width-80, G.height-140, "#fff");
   drawCenterText(stage.name, G.width/2, 25, "#fff", 14);
+  
+  // 디버깅 정보를 텍스트로 표시 (필요 시 주석 해제)
+  // const combatNpcs = stage.npcs.filter(n => !n.isShop);
+  // const defeatedInfo = combatNpcs.map(n => `${n.id}: ${n.defeated ? '처치됨' : '안됨'}`).join(', ');
+  // drawText(`포탈 상태: ${stage.portal ? (stage.portal.active ? '활성화' : '비활성화') : '없음'}`, 50, 50, "#ff0", "left", 12);
+  // drawText(`전투 NPC 상태: ${defeatedInfo}`, 50, 65, "#ff0", "left", 12);
 
   for(const n of stage.npcs) {
     ctx.globalAlpha = n.defeated ? 0.3 : 1;
@@ -312,8 +322,8 @@ function worldDraw() {
   drawText(`G: ${parseInt(G.player.gold || 0)}`, G.width - 100, 10, "#ff0", "right", 14);
 
   drawFrame(20, G.height-90, G.width-40, 70);
-  const allCombatNpcsDefeated = stage.npcs.filter(n => !n.isShop).every(n => n.defeated);
-  const hintMsg = allCombatNpcsDefeated ? "모든 노드 안정화. 다음 구역으로 이동하십시오." : "균열의 파편들을 찾아 안정화하십시오.";
+  const allDefeated = stage.npcs.every(n => n.defeated);
+  const hintMsg = allDefeated ? "모든 노드 안정화. 다음 구역으로 이동하십시오." : "균열의 파편들을 찾아 안정화하십시오.";
   drawText(hintMsg, 28, G.height-82, "#fff", "left", 14);
 }
 
@@ -330,9 +340,6 @@ const battle = {
   soul: { x: 320, y: 210, r: 4, speed: 1.8, invul:0 },
   bullets: [], waveIndex: 0, waveTime: 0, waveState: null,
   currentBossId: null, currentBossData: {},
-  resultStartTime: null,
-  resultMessages: null,
-  resultMessageIndex: 0,
 };
 
 function startBattle(bossId) {
@@ -352,8 +359,8 @@ function startBattle(bossId) {
 
 function battleReset() {
   battle.phase = "intro"; battle.sub = "menu_main"; battle.enemy.alive = true;
-  battle.player = G.player;
-  battle.player.hp = G.player.hp;
+  battle.player = G.player; // G.player를 참조하도록 변경
+  battle.player.hp = G.player.hp; // 전투 시작 시 HP는 G.player의 현재 HP
   battle.ui.mainIndex = 0; battle.ui.listIndex = 0; battle.ui.msgTimer = 120; battle.ui.shuffleMap = null;
   battle.atk.active = false; battle.bullets = []; G.particles = []; battle.waveIndex = -1; battle.waveTime = 0; battle.waveState = null;
   battle.soul.x = 320; battle.soul.y = 180; battle.soul.invul = 0;
@@ -380,65 +387,96 @@ function battleUpdate(dt) {
     case "enemy_turn": enemyTurnUpdate(dt); break;
     case "result":
       if (!battle.resultMessages) {
+        // 메시지 큐 초기화
         battle.resultMessages = [];
         battle.resultMessageIndex = 0;
         battle.resultStartTime = now();
         
-        const spared = battle.enemy.mercyStat <= battle.enemy.spareThreshold || (battle.currentBossId === 'anomaly' && battle.enemy.hp <= 10);
+        const spared = battle.enemy.mercyStat <= battle.enemy.spareThreshold;
         const killed = battle.enemy.hp <= 0;
         const data = battle.currentBossData;
         
         if (spared) {
           G.endingState.spares++;
-          if (data.mercyDialogue) battle.resultMessages.push(data.mercyDialogue);
+          // 불살 대사 순서대로 추가
+          if (data.mercyDialogue) {
+            battle.resultMessages.push(data.mercyDialogue);
+          }
           battle.resultMessages.push("자비를 베풀어 20G를 얻었다.");
           G.player.gold = parseInt(G.player.gold || 0) + 20;
+          
+          // 불살 루트 전용 아이템 지급 (jester의 경우)
           if (battle.currentBossId === 'jester') {
               G.player.inv.push({ name: "광대의 가면", desc: "장난스러운 에너지가 느껴진다.", special: true });
-              battle.resultMessages.push(data.itemDialogue || "광대의 가면을 얻었다!");
+              if (data.itemDialogue) {
+                battle.resultMessages.push(data.itemDialogue);
+              } else {
+                battle.resultMessages.push("광대의 가면을 얻었다!");
+              }
           }
         } else if (killed) {
           G.endingState.kills++;
-          if (data.deathDialogue) battle.resultMessages.push(data.deathDialogue);
+          // 몰살 대사 순서대로 추가
+          if (data.deathDialogue) {
+            battle.resultMessages.push(data.deathDialogue);
+          }
+          
           G.player.exp = parseInt(G.player.exp || 0) + parseInt(data.exp || 0);
           G.player.gold = parseInt(G.player.gold || 0) + parseInt(data.gold || 0);
           battle.resultMessages.push(`승리! ${data.exp} EXP와 ${data.gold}G를 얻었다.`);
-          const leveledUp = checkLevelUp();
-          if (leveledUp) {
-            battle.resultMessages.push(`레벨 업! LV ${G.player.lv}가 되었다!`);
-          }
+          checkLevelUp();
+          
+          // 몰살 전용 아이템 지급
           if (data.genocideItem) {
             G.player.inv.push(data.genocideItem);
             battle.resultMessages.push(`${data.genocideItem.name}을(를) 얻었다!`);
           }
-          if (data.itemDescGenocide) battle.resultMessages.push(data.itemDescGenocide);
+          
+          // 몰살 루트에서 아이템 설명 (특별한 설명)
+          if (data.itemDescGenocide) {
+            battle.resultMessages.push(data.itemDescGenocide);
+          }
         }
         
-        if (battle.resultMessages.length > 0) pushMsg(battle.resultMessages[0], 9999);
+        // 첫 번째 메시지 표시
+        if (battle.resultMessages.length > 0) {
+          pushMsg(battle.resultMessages[0], 9999); // 긴 시간으로 설정
+        }
         
         const stage = world.stages[G.currentStage];
         const npc = stage.npcs.find(n=>n.id === battle.currentBossId);
         if(npc) npc.defeated = true;
         
-        const allCombatNpcsDefeated = stage.npcs.filter(n => !n.isShop).every(n => n.defeated);
-        if(allCombatNpcsDefeated && stage.portal) stage.portal.active = true;
+        // 전투 대상 NPC만 필터링하여 모두 defeated 상태인지 확인 (상점 NPC 제외)
+        const allDefeatedInStage = stage.npcs.filter(n => !n.isShop).every(n => n.defeated);
+        if(allDefeatedInStage && stage.portal) stage.portal.active = true;
       }
       
+      // Z키로 다음 메시지 또는 종료
       if (pressed(["z","Z","Enter"])) {
         clearConfirmKeys();
         battle.resultMessageIndex++;
+        
         if (battle.resultMessageIndex < battle.resultMessages.length) {
+          // 다음 메시지 표시
           pushMsg(battle.resultMessages[battle.resultMessageIndex], 9999);
         } else {
+          // 모든 메시지 완료, 다음 단계로
           bgmManager.stopAll();
           if(battle.currentBossId === 'kernel' && G.endingState.kills === 0) {
               G.state = 'intermission';
+              clearConfirmKeys();
               setTimeout(() => startBattle('anomaly'), 2000);
           } else if (battle.currentBossId === 'anomaly') {
               G.state = 'ending';
+              clearConfirmKeys();
           } else {
               G.state = "overworld";
+              clearConfirmKeys();
           }
+          battle.resultMessages = null;
+          battle.resultMessageIndex = 0;
+          battle.resultStartTime = null;
         }
       }
       break;
@@ -449,7 +487,7 @@ function battleDraw() {
   ctx.fillStyle="#000"; ctx.fillRect(0,0,G.width,G.height);
   drawText(battle.enemy.name, 28, 24, "#fff", "left", 18);
   drawText(`HP: ${Math.max(0,battle.enemy.hp)}/${battle.enemy.hpMax}`, 28, 44, "#bbb", "left", 14);
-  const mercyColor = (battle.currentBossId === 'anomaly' && battle.enemy.hp <= 10) || battle.enemy.mercyStat <= battle.enemy.spareThreshold ? "#0f0" : "#f66";
+  const mercyColor = battle.enemy.mercyStat <= battle.enemy.spareThreshold ? "#0f0" : "#f66";
   drawText(`${battle.enemy.mercyName}: ${Math.max(0,battle.enemy.mercyStat)}`, 28, 62, mercyColor, "left", 14);
   
   ctx.save(); ctx.globalAlpha = battle.enemy.alive ? 1 : 0.2;
@@ -463,7 +501,7 @@ function battleDraw() {
   }
   ctx.restore();
 
-  drawFrame(20, G.height-100, G.width-40, 80);
+  drawFrame(20, G.height-100, G.width-40, 80); // Main battle frame
   drawText(`LV ${G.player.lv}  AUDITOR  HP ${G.player.hp}/${G.player.hpMax}`, 28, G.height-120, "#0ff", "left", 14);
   drawText(`G: ${parseInt(G.player.gold || 0)}`, G.width - 100, G.height-120, "#ff0", "right", 14);
   ctx.fillStyle="#333"; ctx.fillRect(240, G.height-117, 200, 8);
@@ -481,18 +519,16 @@ function battleDraw() {
 }
 
 function checkLevelUp() {
-  if (G.endingState.kills === 0) return false;
-  let leveledUp = false;
+  if (G.endingState.kills === 0) return; // 불살 루트에서는 레벨업 불가
   while (G.player.exp >= G.player.expNext) {
-    leveledUp = true;
     G.player.lv++;
     G.player.exp -= G.player.expNext;
     G.player.expNext = Math.floor(G.player.expNext * 1.5);
     G.player.hpMax += 5;
-    G.player.hp = G.player.hpMax;
+    G.player.hp = G.player.hpMax; // 레벨업 시 체력 완전 회복
     beep("triangle", 1200, 0.2, 0.05);
+    // TODO: 레벨업 효과 표시
   }
-  return leveledUp;
 }
 
 function pushMsg(s, dur=90) { 
@@ -515,21 +551,13 @@ function menuUpdate() {
       else if (selectedAction === 1) { battle.sub = "menu_act"; ui.listIndex = 0; pushMsg("무엇을 할까?"); }
       else if (selectedAction === 2) { battle.sub = "menu_item"; ui.listIndex = 0; pushMsg("아이템을 선택해 시스템을 복구한다."); }
       else if (selectedAction === 3) {
-        // BUG FIX: 최종 보스 자비 조건 추가
-        const canSpareAnomaly = battle.currentBossId === 'anomaly' && battle.enemy.hp <= 10;
-        const canSpareNormal = battle.currentBossId !== 'anomaly' && battle.enemy.mercyStat <= battle.enemy.spareThreshold;
-
-        if (canSpareAnomaly || canSpareNormal) {
+        if (battle.enemy.mercyStat <= battle.enemy.spareThreshold) {
           pushMsg("자비를 베풀었다. 노드가 안정화되었다...");
           battle.enemy.alive = false;
           battle.phase = "result";
           clearConfirmKeys();
         } else {
-          if (battle.currentBossId === 'anomaly') {
-            pushMsg("아직... 정화되지 않았다. 힘이 너무 강하다.");
-          } else {
-            pushMsg("아직 안정화되지 않은 것 같다...");
-          }
+          pushMsg("아직 안정화되지 않은 것 같다...");
           endPlayerTurn();
         }
       }
@@ -537,17 +565,15 @@ function menuUpdate() {
       if (selectedAction <= 2) { clearConfirmKeys(); }
     }
   } else if (["menu_act", "menu_item"].includes(battle.sub)) {
-      const list = battle.sub === "menu_act" ? battle.currentBossData.actOptions : G.player.inv;
+      const list = battle.sub === "menu_act" ? battle.currentBossData.actOptions : battle.player.inv;
       const n = list.length || 1;
       if (pressed(["ArrowUp"])) { ui.listIndex = (ui.listIndex + n - 1)%n; keys["ArrowUp"]=false; beep("square",520,0.05,0.02); }
       if (pressed(["ArrowDown"])) { ui.listIndex = (ui.listIndex + 1)%n; keys["ArrowDown"]=false; beep("square",520,0.05,0.02); }
       if (pressed(["x","X"])) { battle.sub = "menu_main"; pushMsg("..."); keys["x"]=keys["X"]=false; }
       if (pressed(["z","Z","Enter"])) {
           if (battle.sub === "menu_act") {
-              if (battle.currentBossData.actOptions.length > 0) {
-                battle.currentBossData.actOptions[ui.listIndex].handler(battle);
-                endPlayerTurn();
-              }
+              battle.currentBossData.actOptions[ui.listIndex].handler(battle);
+              endPlayerTurn();
           } else {
               if (G.player.inv.length === 0) { pushMsg("사용할 아이템이 없다."); endPlayerTurn(); } 
               else {
@@ -557,10 +583,24 @@ function menuUpdate() {
                     G.player.hp = Math.min(G.player.hpMax, G.player.hp + item.heal);
                     const actualHeal = G.player.hp - beforeHP;
                     pushMsg(`${item.name}을 사용! HP ${actualHeal} 회복 (${beforeHP} → ${G.player.hp})`);
+                    
+                    // 사용 시 설명 출력 (몰살 루트에 따라 다른 설명)
+                    if (G.endingState.kills > 0 && item.genocideUseDesc) {
+                      pushMsg(item.genocideUseDesc);
+                    } else if (item.useDesc) {
+                      pushMsg(item.useDesc);
+                    }
                   } else if (item.buff) {
-                    G.player.buffs.push(JSON.parse(JSON.stringify(item.buff)));
+                    G.player.buffs.push(JSON.parse(JSON.stringify(item.buff))); // Deep copy
                     const buff = item.buff;
                     pushMsg(`${item.name}을 사용! 공격력 +${buff.power} (${buff.duration}턴간)`);
+                    
+                    // 버프 아이템 사용 시 설명
+                    if (G.endingState.kills > 0 && item.genocideUseDesc) {
+                      pushMsg(item.genocideUseDesc);
+                    } else if (item.useDesc) {
+                      pushMsg(item.useDesc);
+                    }
                   }
                   endPlayerTurn();
               }
@@ -601,19 +641,55 @@ function startAttackTiming() { battle.phase = "attack_timing"; battle.atk.active
 function attackTimingUpdate(dt) { const a = battle.atk; a.pointer += a.dir * 3.2 * dt * 60; if (a.pointer <= a.barX) a.dir = 1; if (a.pointer >= a.barX + a.barW) a.dir = -1; if (pressed(["z","Z","Enter"])) { clearConfirmKeys(); const d = Math.abs(a.pointer - a.zoneX); let dmg = (d < a.zoneW*0.5) ? 12 : (d < a.zoneW) ? 9 : (d < a.zoneW*1.8) ? 6 : 3; const atkBuff = G.player.buffs.find(b => b.type === 'atk'); if (atkBuff) { dmg += atkBuff.power; } battle.enemy.hp = Math.max(0, battle.enemy.hp - dmg); G.shakeT=5; spawnParticles(G.width/2, 100, 10, {color:'#fff', speed:3}); beep("square", 220 + 20*dmg, 0.07, 0.03); pushMsg(`공격! ${dmg}의 데미지.`); if (battle.enemy.hp<=0) { battle.enemy.alive = false; battle.phase = "result"; G.flashT=10; spawnParticles(G.width/2, 100, 50, {color:'#f00', speed:5}); clearConfirmKeys(); return; } endPlayerTurn(); } }
 function attackTimingDraw() { const bx = battle.atk.barX, by = G.height-60; drawRect(bx, by, battle.atk.barW, 8, "#444"); drawRect(battle.atk.zoneX - battle.atk.zoneW/2, by-2, battle.atk.zoneW, 12, "#ff0", false, 2); drawRect(battle.atk.pointer-2, by-6, 4, 20, "#fff"); }
 function endPlayerTurn() { battle.phase = "enemy_turn"; battle.waveTime = 0; battle.bullets.length = 0; battle.soul.invul = Math.max(0, battle.soul.invul); const patternCount = battle.currentBossData.attackPatterns.length; battle.waveIndex = (battle.waveIndex + 1) % patternCount; battle.ui.shuffleMap = null; battle.waveState=null; G.player.buffs.forEach(b => { b.duration--; }); G.player.buffs = G.player.buffs.filter(b => b.duration > 0); }
-function enemyTurnUpdate(dt) { const b = battle.box, s = battle.soul, sp = s.speed * dt * 60; b.w += (b.targetW - b.w) * 0.1; b.h += (b.targetH - b.h) * 0.1; b.x = G.width/2 - b.w/2; b.y = 120; let vx=0, vy=0; if (pressed(["ArrowLeft"])) vx -= 1; if (pressed(["ArrowRight"])) vx += 1; if (pressed(["ArrowUp"])) vy -= 1; if (pressed(["ArrowDown"])) vy += 1; s.x = clamp(s.x + vx*sp, b.x + s.r, b.x + b.w - s.r); s.y = clamp(s.y + vy*sp, b.y + s.r, b.y + b.h - s.r); battle.waveTime += dt; battle.currentBossData.attackPatterns[battle.waveIndex](battle.waveTime, dt, battle); for (let i = battle.bullets.length - 1; i >= 0; i--) { const bu = battle.bullets[i]; bu.x += (bu.vx || 0) * dt * 60; bu.y += (bu.vy || 0) * dt * 60; if(bu.update) bu.update(bu, dt, battle); if (bu.x<-20 || bu.x>G.width+20 || bu.y<-20 || bu.y>G.height+20) bu.dead = true; if(bu.dead) { if(bu.color) spawnParticles(bu.x, bu.y, 3, {color:bu.color, life:0.2, speed:1}); battle.bullets.splice(i, 1); continue; } const dx = bu.x - s.x, dy = bu.y - s.y; if (dx*dx + dy*dy < (s.r + bu.r)*(s.r + bu.r) && s.invul <= 0) { takeDamage(bu.dmg||3); s.invul = 1.0; G.shakeT = 10; spawnParticles(s.x, s.y, 20, {color:'#f00', life:0.4, speed:2}); } } if (s.invul>0) s.invul -= dt; if ((battle.waveTime > 6.5 && battle.currentBossId !== 'anomaly') || (battle.waveTime > 8.5 && battle.currentBossId === 'anomaly') || G.player.hp<=0) { if (G.player.hp<=0) { G.state = "lose"; clearConfirmKeys(); } else { battle.phase = "menu"; battle.sub = "menu_main"; pushMsg("당신의 턴이다."); } b.targetW = 280; b.targetH = 120; } }
+function enemyTurnUpdate(dt) { const b = battle.box, s = battle.soul, sp = s.speed * dt * 60; b.w += (b.targetW - b.w) * 0.1; b.h += (b.targetH - b.h) * 0.1; b.x = G.width/2 - b.w/2; b.y = 120; let vx=0, vy=0; if (pressed(["ArrowLeft"])) vx -= 1; if (pressed(["ArrowRight"])) vx += 1; if (pressed(["ArrowUp"])) vy -= 1; if (pressed(["ArrowDown"])) vy += 1; s.x = clamp(s.x + vx*sp, b.x + s.r, b.x + b.w - s.r); s.y = clamp(s.y + vy*sp, b.y + s.r, b.y + b.h - s.r); battle.waveTime += dt; battle.currentBossData.attackPatterns[battle.waveIndex](battle.waveTime, dt, battle); for (let i = battle.bullets.length - 1; i >= 0; i--) { const bu = battle.bullets[i]; bu.x += (bu.vx || 0) * dt * 60; bu.y += (bu.vy || 0) * dt * 60; if(bu.update) bu.update(bu, dt, battle); if (bu.x<-20 || bu.x>G.width+20 || bu.y<-20 || bu.y>G.height+20) bu.dead = true; if(bu.dead) { if(bu.color) spawnParticles(bu.x, bu.y, 3, {color:bu.color, life:0.2, speed:1}); battle.bullets.splice(i, 1); continue; } const dx = bu.x - s.x, dy = bu.y - s.y; if (dx*dx + dy*dy < (s.r + bu.r)*(s.r + bu.r) && s.invul <= 0) { takeDamage(bu.dmg||3); s.invul = 1.0; G.shakeT = 10; spawnParticles(s.x, s.y, 20, {color:'#f00', life:0.4, speed:2}); } } if (s.invul>0) s.invul -= dt; if ((battle.waveTime > 6.5 && battle.currentBossId !== 'anomaly') || (battle.waveTime > 8.5 && battle.currentBossId === 'anomaly') || battle.player.hp<=0) { if (battle.player.hp<=0) { G.state = "lose"; clearConfirmKeys(); } else { battle.phase = "menu"; battle.sub = "menu_main"; pushMsg("당신의 턴이다."); } b.targetW = 280; b.targetH = 120; } }
 function enemyTurnDraw() { const b = battle.box; drawFrame(b.x, b.y, b.w, b.h, "#fff"); const s = battle.soul; ctx.save(); if (s.invul>0) ctx.globalAlpha = 0.5 + 0.5*Math.sin(now()/50); drawRect(s.x - s.r, s.y - s.r, s.r*2, s.r*2, "#f00"); ctx.restore(); for (const bu of battle.bullets) { if(bu.text) drawCenterText(bu.text, bu.x, bu.y, bu.color||'#fff', bu.r*4); else drawRect(bu.x - bu.r, bu.y - bu.r, bu.r*2, bu.r*2, bu.color||"#fff"); } if (battle.currentBossId === 'kernel' && battle.waveIndex === 1 && battle.waveState && battle.waveState.sweeps) { battle.waveState.sweeps.forEach(s => { const p = s.dir > 0 ? s.p : 1 - s.p; const pos = s.isV ? b.x + b.w * p : b.y + b.h * p; const color = s.warning > 0 ? `rgba(255,100,100,${0.5 * (1 - s.warning / 0.8)})` : 'rgba(255, 80, 80, 0.9)'; const thickness = s.warning > 0 ? 2 : 4; drawRect(s.isV ? pos : b.x, s.isV ? b.y : pos, s.isV ? thickness : b.w, s.isV ? b.h : thickness, color); }); } }
-function takeDamage(dmg) { G.player.hp = Math.max(0, G.player.hp - dmg); beep("triangle",160,0.08,0.04); pushMsg(`HIT! -${dmg} HP`); if (G.player.hp<=0) { G.flashT=15; G.state = "lose"; clearConfirmKeys(); } }
+function takeDamage(dmg) { battle.player.hp = Math.max(0, battle.player.hp - dmg); beep("triangle",160,0.08,0.04); pushMsg(`HIT! -${dmg} HP`); if (battle.player.hp<=0) { G.flashT=15; G.state = "lose"; clearConfirmKeys(); } }
 
 // ------------------------------------------------------------
 // 보스 데이터 (패턴 수정)
 // ------------------------------------------------------------
 const BOSS_DATA = {
-    'sentinel': { name: "수호자 글리치", symbol: "S", color: '#ff6600', hpMax: 80, mercyStatName: "불안정", mercyValue: 100, mercyThreshold: 20, bgmTrack: 'track1', exp: 25, gold: 40, introDialogue: "위협 감지. '생츄어리'의 입구를 봉쇄한다.", actOptions: [{ name: "상태 확인", handler: b => pushMsg("한때는 보호자였을 존재. 지금은 광기에 휩싸였다.") }, { name: "디버깅", handler: b => { const r = 15+randi(0,8); b.enemy.mercyStat -= r; pushMsg(`오류를 수정했다. 불안정 ${r} 감소.`); }}, { name: "강제 재부팅", handler: b => { b.enemy.mercyStat += 10; pushMsg(`충격으로 더 불안정해졌다. +10`); }}], deathDialogue: "...시스템 오류... 종료...", mercyDialogue: "...당신의 자비에 시스템이 잠시 안정을 찾는다...", itemDialogue: "글리치의 파편을 얻었다. 이 파편은 불안정한 힘을 품고 있다.", itemDescGenocide: "이 파편을 만지면 손끝이 저려온다. 파괴의 흔적이 남아 있다.", genocideItem: { name: "오염된 방화벽", desc: "시스템을 공격적으로 보호한다.", heal: 0, buff: { type: 'atk', power: 5, duration: 5 } }, attackPatterns: [ (t, dt, b) => { if (Math.floor(t*1.5)!==Math.floor((t-dt)*1.5)) { const side = Math.random()<0.5 ? -1:1, gapY = rand(b.box.y + 20, b.box.y + b.box.h - 20); for(let i=0; i<12; i++) { const y = b.box.y + i * (b.box.h/11); if(Math.abs(y - gapY) > 20) b.bullets.push({x: b.box.x + (side<0 ? -10 : b.box.w+10), y, vx: side*-2, vy:0, r:4, color:'#ff6600'}); } } }, (t, dt, b) => { if(!b.waveState) b.waveState = { nextLaser: 0, lasers:[]}; if(t > b.waveState.nextLaser) { b.waveState.lasers.push({x:rand(b.box.x+10, b.box.x+b.box.w-10), y:b.box.y, warning: 1.0}); b.waveState.nextLaser = t + 0.8; } b.waveState.lasers.forEach(l => { if(l.warning > 0) { l.warning -= dt*1.2; drawRect(l.x-1, b.box.y, 2, b.box.h, `rgba(255,100,0,${1-l.warning})`); } else { if(!l.fired) { beep("sine", 800, 0.2, 0.03); G.shakeT=8; l.fired = true; } for(let i=0; i<5; i++) b.bullets.push({x:l.x, y: b.box.y -10 + i*20, vx:0, vy:3.5, r:5, color:'#ff6600'}); l.dead = true; } }); b.waveState.lasers = b.waveState.lasers.filter(l=>!l.dead); }, (t, dt, b) => { if (Math.floor(t*8)!==Math.floor((t-dt)*8)) { const ang=rand(0,Math.PI*2); b.bullets.push({x: b.box.x+b.box.w/2, y:b.box.y+b.box.h/2, vx:Math.cos(ang)*1.5, vy:Math.sin(ang)*1.5, r:4, color:'#ffaa00', life: 2.0, update(bu, dt){ bu.vx *= 1.02; bu.vy *= 1.02; bu.life -= dt; if(bu.life <= 0) bu.dead=true; }}); } } ] },
-    'archive': { name: "속삭이는 아카이브", symbol: "A", color: '#88aaff', hpMax: 50, mercyStatName: "절망", mercyValue: 120, mercyThreshold: 0, bgmTrack: 'track2', exp: 10, gold: 40, introDialogue: "기억들이... 비명을 질러... 너무 많은 슬픔...", deathDialogue: "...기억이... 사라진다... 고마워...", mercyDialogue: "...슬픔이 잠시 가라앉는다... 당신의 온기가 느껴진다...", itemDialogue: "아카이브의 조각을 얻었다. 잊혀진 기억이 담겨 있다.", itemDescGenocide: "이 조각은 차갑고 무겁다. 슬픔이 스며든다.", genocideItem: { name: "삭제된 기억", desc: "잊혀진 고통의 조각.", heal: 15, genocideUseDesc: "기억이 너의 것이 된다. 아픈 기억들이..." }, actOptions: [{ name: "경청하기", handler: b => { const r = 12+randi(0,5); b.enemy.mercyStat -= r; pushMsg(`조각난 기억을 들었다. 절망 ${r} 감소.`); }}, { name: "파일 정리", handler: b => { const r = 20+randi(0,10); b.enemy.mercyStat -= r; pushMsg(`흩어진 데이터를 정리했다. 절망 ${r} 감소.`); }}, { name: "무시하기", handler: b => { b.enemy.hp-=2; pushMsg(`아카이브의 슬픔이 깊어졌다...`); }}], attackPatterns: [ (t, dt, b) => { if (Math.floor(t*6)!==Math.floor((t-dt)*6)) b.bullets.push({x:rand(b.box.x+10, b.box.x+b.box.w-10), y:b.box.y-8, vx:0, vy:1.8, r:4, color:"#aaddff", update(bu){ bu.vx = Math.sin(bu.y*0.1)*0.8; spawnParticles(bu.x, bu.y, 1, {color:'#aaddff', life:0.3, size:1, speed:0.1}); }}); }, (t, dt, b) => { if (Math.floor(t*5)!==Math.floor((t-dt)*5)) { const chars = "잊지마기억해왜슬픔도움", char = chars[randi(0, chars.length)]; b.bullets.push({x:rand(b.box.x, b.box.x+b.box.w), y:b.box.y-10, vx:rand(-0.5,0.5), vy:1.5, r:4, color:"#fff", text:char}); } }, (t, dt, b) => { if(Math.floor(t*8)!==Math.floor((t-dt)*8)) { const side = Math.random()<0.5?-1:1; b.bullets.push({x: b.soul.x + side*150, y:rand(b.box.y, b.box.y+b.box.h), vx:side*-3, vy:rand(-1,1), r:3, color:'#88aaff'}); } } ] },
-    'jester': { name: "장난꾸러기 프로세스", symbol: "?", color: '#cc00ff', hpMax: 70, mercyStatName: "흥미", mercyValue: 100, mercyThreshold: 25, bgmTrack: 'track3', exp: 15, gold: 50, introDialogue: "재미없는 세상은 지워버리자! 자, 게임 시작!", deathDialogue: "...이겼네! 다음엔 더 재밌게 놀자!", mercyDialogue: "...흥미로운 선택이야! 넌 재미있는 사람이군!", itemDialogue: "광대의 가면을 얻었다. 장난기 가득한 에너지가 느껴진다.", itemDescGenocide: "이 가면은 웃고 있지만, 어딘가 슬퍼 보인다.", genocideItem: { name: "비틀린 웃음", desc: "광기를 담은 에너지.", heal: 0, buff: { type: 'atk', power: 8, duration: 3 } }, actOptions: [{ name: "놀아주기", handler: b => { const r = 20+randi(0,10); b.enemy.mercyStat -= r; pushMsg(`장단에 맞춰주자 즐거워한다. 흥미 ${r} 감소.`); }}, { name: "무시하기", handler: b => { b.enemy.mercyStat += 15; pushMsg(`지루해한다. 흥미가 15 증가했다!`); }}, { name: "수수께끼", handler: b => { const r = 15+randi(0,5); b.enemy.mercyStat -= r; pushMsg(`간단한 수수께끼를 냈다. 흥미 ${r} 감소.`); }}], attackPatterns: [ (t, dt, b) => { b.ui.shuffleMap = b.ui.shuffleMap || shuffle([0,1,2,3]); if (Math.floor(t*8)!==Math.floor((t-dt)*8)) { b.bullets.push({x:rand(b.box.x, b.box.x+b.box.w), y:rand(b.box.y, b.box.y+b.box.h), vx:0, vy:0, r:10, color:'#cc00ff', life:0.5, update(bu, dt){ bu.r -= dt*20; bu.life -= dt; if(bu.life <= 0) bu.dead=true; }}); } }, (t, dt, b) => { if (Math.floor(t*6)!==Math.floor((t-dt)*6)) { const isSafe = Math.random() < 0.3; b.bullets.push({x:b.box.x-10, y:rand(b.box.y, b.box.y+b.box.h), vx:2.5, vy:0, r:4, color:isSafe?'#0f0':'#cc00ff', dmg:isSafe? -1:3}); } }, (t, dt, b) => { if(!b.waveState) b.waveState={t:0}; b.waveState.t += dt; const ang = b.waveState.t*4; const r = 100 - b.waveState.t*15; if (r>10) for(let i=0;i<2;i++){ const finalAng = ang+i*Math.PI; b.bullets.push({x:b.soul.x+Math.cos(finalAng)*r, y:b.soul.y+Math.sin(finalAng)*r, r:4, color:'#ff00cc', dmg:4}); } } ] },
-    'kernel': { name: "파멸의 커널", symbol: "K", color: '#ff4444', hpMax: 120, mercyStatName: "의지", mercyValue: 999, mercyThreshold: 100, bgmTrack: 'track4', exp: 30, gold: 80, introDialogue: "이 고통스러운 '생츄어리'에... 안식을 주겠다.", deathDialogue: "...파멸이... 끝났다... 네 선택을... 기억하겠다...", mercyDialogue: "...의지가 흔들린다... 네 자비가 나를 구원했다...", itemDialogue: "커널의 핵을 얻었다. 강력한 에너지가 느껴진다.", itemDescGenocide: "이 핵은 뜨겁고 위험하다. 파괴의 힘이 깃들어 있다.", genocideItem: { name: "파괴의 핵심", desc: "시스템을 무너뜨리는 힘.", heal: 0, buff: { type: 'atk', power: 15, duration: 2 } }, actOptions: [{ name: "설득", handler: b => { pushMsg("시스템의 고통을 끝내려는 의지는 확고하다."); }}, { name: "호소", handler: b => { if(b.enemy.hp < 40) { b.enemy.mercyStat -= 400; pushMsg('커널의 의지가 흔들린다!');} else { pushMsg("당신의 목소리는 닿지 않는다.");} }}, { name: "기도", handler: b => { G.player.hp = Math.min(G.player.hpMax, G.player.hp + 3); pushMsg("작은 희망이 피어난다. HP+3");}}], attackPatterns: [ (t, dt, b) => { if (t > 1.0) { b.box.targetW = 140 + 108 * Math.sin((t-1)*2); b.box.targetH = 100 + 36 * Math.cos((t-1)*3); } if (t > 1.0 && Math.floor((t-1)*8)!==Math.floor((t-1-dt)*8)) { const ang = rand(0, Math.PI*2); b.bullets.push({x:b.box.x+b.box.w/2, y:b.box.y+b.box.h/2, vx:Math.cos(ang)*3, vy:Math.sin(ang)*3, r:3, color:'#ff4444'}); } }, (t, dt, b) => { if(!b.waveState) b.waveState = { nextSweep: 0, sweeps:[]}; if(t > b.waveState.nextSweep) { const isV = Math.random() < 0.5, dir = Math.random() < 0.5 ? 1 : -1; b.waveState.sweeps.push({ isV, dir, p: 0, warning: 0.8}); b.waveState.nextSweep = t + 1.8; } b.waveState.sweeps.forEach(s => { s.p += dt * 0.8; if(s.warning > 0) s.warning -=dt; const p = s.dir > 0 ? s.p : 1 - s.p; const pos = s.isV ? b.box.x + b.box.w * p : b.box.y + b.box.h * p; if(s.warning <= 0) { if(s.isV && Math.abs(b.soul.x-pos)<4) s.hit=true; if(!s.isV && Math.abs(b.soul.y-pos)<4) s.hit=true; if(s.hit && !s.damaged && b.soul.invul<=0){ takeDamage(8); b.soul.invul=1; s.damaged=true;} } if(s.p > 1.2) s.dead = true; }); b.waveState.sweeps = b.waveState.sweeps.filter(s=>!s.dead); }, (t, dt, b) => { if(!b.waveState) b.waveState={t:0, fired: false}; b.waveState.t += dt; if(b.waveState.t > 1.5 && b.waveState.t < 2.5) { G.shakeT=2; if(rand(0,1)<0.5) b.bullets.push({x:rand(b.box.x, b.box.x+b.box.w), y:rand(b.box.y, b.box.y+b.box.h), r:2, color:'#fff'}); } if(b.waveState.t > 3 && !b.waveState.fired) { b.bullets.forEach(bu => { const ang=Math.atan2(b.soul.y-bu.y, b.soul.x-bu.x); bu.vx=Math.cos(ang)*3; bu.vy=Math.sin(ang)*3; }); b.waveState.fired = true;} } ] },
-    'anomaly': { name: "뿌리내린 변칙점", symbol: "!", color: '#ff00ff', hpMax: 200, mercyStatName: "존재", mercyValue: 1000, mercyThreshold: 0, bgmTrack: 'track5', exp: 50, gold: 200, introDialogue: "나는... 창조주의... 슬픔이다...", actOptions: [{ name: "정화", handler: b => { b.enemy.hp -= 15; G.flashT=5; pushMsg("당신의 의지가 변칙점을 정화합니다!"); }}, { name: "분석", handler: b => { pushMsg("'아키텍트'의 후회와 고통이 뒤섞여있다."); }}, { name: "자비", handler: b => { pushMsg("자비는... 통하지 않는다. 오직 정화만이 길이다."); }}], attackPatterns: [ (t, dt, b) => { if(Math.floor(t*15)!==Math.floor((t-dt)*15)){ const x=rand(-10,G.width+10), y=rand(-10,G.height+10); const ang=Math.atan2(b.soul.y-y, b.soul.x-x); b.bullets.push({x,y, vx:Math.cos(ang)*2, vy:Math.sin(ang)*2, r:5, color:`hsl(${t*100 % 360}, 100%, 70%)`}); } }, (t, dt, b) => { if(Math.floor(t*2)!==Math.floor((t-dt)*2)){ for(let i=0; i<G.width; i+=20){ b.bullets.push({x:i, y:-10, vx:0, vy:2, r:4, color:'#ff00ff', update(bu){ if(bu.y > b.soul.y + 10) bu.vy=0; }}); } } }, (t, dt, b) => { b.box.targetW = G.width-80; b.box.targetH = G.height-180; if(Math.floor(t*20)!==Math.floor((t-dt)*20)){ const ang=rand(0, Math.PI*2); b.bullets.push({x:b.soul.x, y:b.soul.y, vx:Math.cos(ang)*4, vy:Math.sin(ang)*4, r:3, color:'#fff'}); } }, (t, dt, b) => { if(!b.waveState) b.waveState={t:0}; b.waveState.t += dt; G.shakeT=1; ctx.globalAlpha=0.2; drawRect(0,0,G.width, G.height, `hsl(${t*50 % 360}, 100%, 50%)`); ctx.globalAlpha=1; if(Math.floor(t*25)!==Math.floor((t-dt)*25)) { b.bullets.push({x:b.soul.x+rand(-20,20), y:b.soul.y+rand(-20,20), r:8, color:`#fff`, life:0.2, update(bu, dt){ bu.r-=dt*40; bu.life -= dt; if(bu.life <= 0)bu.dead=true; }}); } } ] },
+    'sentinel': {
+      name: "수호자 글리치", symbol: "S", color: '#ff6600', hpMax: 80, mercyStatName: "불안정", mercyValue: 100, mercyThreshold: 20, bgmTrack: 'track1', 
+      exp: 25, gold: 40, 
+      introDialogue: "...침입자 감지. 시스템 프로토콜 ‘보호’ 실행... 그러나, 나는... 무엇을 지키는가...",
+      actOptions: [{ name: "상태 확인", handler: b => pushMsg("한때는 보호자였을 존재. 지금은 광기에 휩싸였다.") }, { name: "디버깅", handler: b => { const r = 15+randi(0,8); b.enemy.mercyStat -= r; pushMsg(`오류를 수정했다. 불안정 ${r} 감소.`); }}, { name: "강제 재부팅", handler: b => { b.enemy.mercyStat += 10; pushMsg(`충격으로 더 불안정해졌다. +10`); }}],
+      deathDialogue: "...시스템 오류... 종료...", 
+      mercyDialogue: "...당신의 자비에 시스템이 잠시 안정을 찾는다...",
+      itemDialogue: "글리치의 파편을 얻었다. 이 파편은 불안정한 힘을 품고 있다.",
+      itemDescGenocide: "이 파편을 만지면 손끝이 저려온다. 파괴의 흔적이 남아 있다.",
+      genocideItem: { name: "오염된 방화벽", desc: "시스템을 공격적으로 보호한다.", heal: 0, buff: { type: 'atk', power: 5, duration: 5 } },
+      attackPatterns: [ (t, dt, b) => { if (Math.floor(t*1.5)!==Math.floor((t-dt)*1.5)) { const side = Math.random()<0.5 ? -1:1, gapY = rand(b.box.y + 20, b.box.y + b.box.h - 20); for(let i=0; i<12; i++) { const y = b.box.y + i * (b.box.h/11); if(Math.abs(y - gapY) > 20) b.bullets.push({x: b.box.x + (side<0 ? -10 : b.box.w+10), y, vx: side*-2, vy:0, r:4, color:'#ff6600'}); } } }, (t, dt, b) => { if(!b.waveState) b.waveState = { nextLaser: 0, lasers:[]}; if(t > b.waveState.nextLaser) { b.waveState.lasers.push({x:rand(b.box.x+10, b.box.x+b.box.w-10), y:b.box.y, warning: 1.0}); b.waveState.nextLaser = t + 0.8; } b.waveState.lasers.forEach(l => { if(l.warning > 0) { l.warning -= dt*1.2; drawRect(l.x-1, b.box.y, 2, b.box.h, `rgba(255,100,0,${1-l.warning})`); } else { if(!l.fired) { beep("sine", 800, 0.2, 0.03); G.shakeT=8; l.fired = true; } for(let i=0; i<5; i++) b.bullets.push({x:l.x, y: b.box.y -10 + i*20, vx:0, vy:3.5, r:5, color:'#ff6600'}); l.dead = true; } }); b.waveState.lasers = b.waveState.lasers.filter(l=>!l.dead); }, (t, dt, b) => { if (Math.floor(t*8)!==Math.floor((t-dt)*8)) { const ang=rand(0,Math.PI*2); b.bullets.push({x: b.box.x+b.box.w/2, y:b.box.y+b.box.h/2, vx:Math.cos(ang)*1.5, vy:Math.sin(ang)*1.5, r:4, color:'#ffaa00', life: 2.0, update(bu, dt){ bu.vx *= 1.02; bu.vy *= 1.02; bu.life -= dt; if(bu.life <= 0) bu.dead=true; }}); } } ] },
+    'archive': { name: "속삭이는 아카이브", symbol: "A", color: '#88aaff', hpMax: 50, mercyStatName: "절망", mercyValue: 120, mercyThreshold: 0, bgmTrack: 'track2', 
+    exp: 10, gold: 40,
+    introDialogue: "기억들이... 비명을 질러... 너무 많은 슬픔...", 
+    deathDialogue: "...기억이 사라진다... 사..라...지기...ㅅㅣㅀ...", 
+    mercyDialogue: "...슬픔이 잠시 가라앉는다... 당신의 온기가 느껴진다...",
+    itemDialogue: "아카이브의 조각을 얻었다. 잊혀진 기억이 담겨 있다.",
+    itemDescGenocide: "이 조각은 차갑고 무겁다. 슬픔이 스며든다.",
+    genocideItem: { name: "삭제된 기억", desc: "잊혀진 고통의 조각.", heal: 15, genocideUseDesc: "기억이 너의 것이 된다. 아픈 기억들이..." },
+    actOptions: [{ name: "경청하기", handler: b => { const r = 12+randi(0,5); b.enemy.mercyStat -= r; pushMsg(`조각난 기억을 들었다. 절망 ${r} 감소.`); }}, { name: "파일 정리", handler: b => { const r = 20+randi(0,10); b.enemy.mercyStat -= r; pushMsg(`흩어진 데이터를 정리했다. 절망 ${r} 감소.`); }}, { name: "무시하기", handler: b => { b.enemy.hp-=2; pushMsg(`아카이브의 슬픔이 깊어졌다...`); }}], attackPatterns: [ (t, dt, b) => { if (Math.floor(t*6)!==Math.floor((t-dt)*6)) b.bullets.push({x:rand(b.box.x+10, b.box.x+b.box.w-10), y:b.box.y-8, vx:0, vy:1.8, r:4, color:"#aaddff", update(bu){ bu.vx = Math.sin(bu.y*0.1)*0.8; spawnParticles(bu.x, bu.y, 1, {color:'#aaddff', life:0.3, size:1, speed:0.1}); }}); }, (t, dt, b) => { if (Math.floor(t*5)!==Math.floor((t-dt)*5)) { const chars = "잊지마기억해왜슬픔도움", char = chars[randi(0, chars.length)]; b.bullets.push({x:rand(b.box.x, b.box.x+b.box.w), y:b.box.y-10, vx:rand(-0.5,0.5), vy:1.5, r:4, color:"#fff", text:char}); } }, (t, dt, b) => { if(Math.floor(t*8)!==Math.floor((t-dt)*8)) { const side = Math.random()<0.5?-1:1; b.bullets.push({x: b.soul.x + side*150, y:rand(b.box.y, b.box.y+b.box.h), vx:side*-3, vy:rand(-1,1), r:3, color:'#88aaff'}); } } ] },
+    'jester': { name: "장난꾸러기 프로세스", symbol: "?", color: '#cc00ff', hpMax: 70, mercyStatName: "흥미", mercyValue: 100, mercyThreshold: 25, bgmTrack: 'track3', 
+    exp: 15, gold: 50,
+    introDialogue: "재미없는 세상은 지워버리자! 자, 게임 시작!", 
+    deathDialogue: "...게...임...오...버...", 
+    mercyDialogue: "...흥미로운 선택이야! 넌 재미있는 사람이군!",
+    itemDialogue: "광대의 가면을 얻었다. 장난기 가득한 에너지가 느껴진다.",
+    itemDescGenocide: "이 가면은 웃고 있지만, 어딘가 슬퍼 보인다.",
+    genocideItem: { name: "비틀린 웃음", desc: "광기를 담은 에너지.", heal: 0, buff: { type: 'atk', power: 8, duration: 3 } },
+    actOptions: [{ name: "놀아주기", handler: b => { const r = 20+randi(0,10); b.enemy.mercyStat -= r; pushMsg(`장단에 맞춰주자 즐거워한다. 흥미 ${r} 감소.`); }}, { name: "무시하기", handler: b => { b.enemy.mercyStat += 15; pushMsg(`지루해한다. 흥미가 15 증가했다!`); }}, { name: "수수께끼", handler: b => { const r = 15+randi(0,5); b.enemy.mercyStat -= r; pushMsg(`간단한 수수께끼를 냈다. 흥미 ${r} 감소.`); }}], attackPatterns: [ (t, dt, b) => { b.ui.shuffleMap = b.ui.shuffleMap || shuffle([0,1,2,3]); if (Math.floor(t*8)!==Math.floor((t-dt)*8)) { b.bullets.push({x:rand(b.box.x, b.box.x+b.box.w), y:rand(b.box.y, b.box.y+b.box.h), vx:0, vy:0, r:10, color:'#cc00ff', life:0.5, update(bu, dt){ bu.r -= dt*20; bu.life -= dt; if(bu.life <= 0) bu.dead=true; }}); } }, (t, dt, b) => { if (Math.floor(t*6)!==Math.floor((t-dt)*6)) { const isSafe = Math.random() < 0.3; b.bullets.push({x:b.box.x-10, y:rand(b.box.y, b.box.y+b.box.h), vx:2.5, vy:0, r:4, color:isSafe?'#0f0':'#cc00ff', dmg:isSafe? -1:3}); } }, (t, dt, b) => { if(!b.waveState) b.waveState={t:0}; b.waveState.t += dt; const ang = b.waveState.t*4; const r = 100 - b.waveState.t*15; if (r>10) for(let i=0;i<2;i++){ const finalAng = ang+i*Math.PI; b.bullets.push({x:b.soul.x+Math.cos(finalAng)*r, y:b.soul.y+Math.sin(finalAng)*r, r:4, color:'#ff00cc', dmg:4}); } } ] },
+    'kernel': { name: "파멸의 커널", symbol: "K", color: '#ff4444', hpMax: 120, mercyStatName: "의지", mercyValue: 999, mercyThreshold: 100, bgmTrack: 'track4', 
+    exp: 30, gold: 80,
+    introDialogue: "이 고통스러운 '생츄어리'에... 안식을 주겠다.", 
+    deathDialogue: "...과연...파멸이...끝났을...것인가... 네 선택을... 기억하겠다...", 
+    mercyDialogue: "...네 자비가 나를 구원했다...고맙다...",
+    itemDialogue: "커널의 핵을 얻었다. 강력한 에너지가 느껴진다.",
+    itemDescGenocide: "이 핵은 뜨겁고 위험하다. 파괴의 힘이 깃들어 있다.",
+    genocideItem: { name: "파괴의 핵심", desc: "시스템을 무너뜨리는 힘.", heal: 0, buff: { type: 'atk', power: 15, duration: 2 } },
+    actOptions: [{ name: "설득", handler: b => { pushMsg("시스템의 고통을 끝내려는 의지는 확고하다."); }}, { name: "호소", handler: b => { if(b.enemy.hp < 40) { b.enemy.mercyStat -= 400; pushMsg('커널의 의지가 흔들린다!');} else { pushMsg("당신의 목소리는 닿지 않는다.");} }}, { name: "기도", handler: b => { b.player.hp = Math.min(b.player.hpMax, b.player.hp + 3); pushMsg("작은 희망이 피어난다. HP+3");}}], attackPatterns: [ (t, dt, b) => { if (t > 1.0) { b.box.targetW = 140 + 108 * Math.sin((t-1)*2); b.box.targetH = 100 + 36 * Math.cos((t-1)*3); } if (t > 1.0 && Math.floor((t-1)*8)!==Math.floor((t-1-dt)*8)) { const ang = rand(0, Math.PI*2); b.bullets.push({x:b.box.x+b.box.w/2, y:b.box.y+b.box.h/2, vx:Math.cos(ang)*3, vy:Math.sin(ang)*3, r:3, color:'#ff4444'}); } }, (t, dt, b) => { if(!b.waveState) b.waveState = { nextSweep: 0, sweeps:[]}; if(t > b.waveState.nextSweep) { const isV = Math.random() < 0.5, dir = Math.random() < 0.5 ? 1 : -1; b.waveState.sweeps.push({ isV, dir, p: 0, warning: 0.8}); b.waveState.nextSweep = t + 1.8; } b.waveState.sweeps.forEach(s => { s.p += dt * 0.8; if(s.warning > 0) s.warning -=dt; const p = s.dir > 0 ? s.p : 1 - s.p; const pos = s.isV ? b.box.x + b.box.w * p : b.box.y + b.box.h * p; if(s.warning <= 0) { if(s.isV && Math.abs(b.soul.x-pos)<4) s.hit=true; if(!s.isV && Math.abs(b.soul.y-pos)<4) s.hit=true; if(s.hit && !s.damaged && b.soul.invul<=0){ takeDamage(8); b.soul.invul=1; s.damaged=true;} } if(s.p > 1.2) s.dead = true; }); b.waveState.sweeps = b.waveState.sweeps.filter(s=>!s.dead); }, (t, dt, b) => { if(!b.waveState) b.waveState={t:0, fired: false}; b.waveState.t += dt; if(b.waveState.t > 1.5 && b.waveState.t < 2.5) { G.shakeT=2; if(rand(0,1)<0.5) b.bullets.push({x:rand(b.box.x, b.box.x+b.box.w), y:rand(b.box.y, b.box.y+b.box.h), r:2, color:'#fff'}); } if(b.waveState.t > 3 && !b.waveState.fired) { b.bullets.forEach(bu => { const ang=Math.atan2(b.soul.y-bu.y, b.soul.x-bu.x); bu.vx=Math.cos(ang)*3; bu.vy=Math.sin(ang)*3; }); b.waveState.fired = true;} } ] },
+    'anomaly': { name: "뿌리내린 변칙점", symbol: "!", color: '#ff00ff', hpMax: 200, mercyStatName: "존재", mercyValue: 1000, mercyThreshold: 9999, bgmTrack: 'track5', 
+    exp: 50, gold: 200,
+    introDialogue: "나는... 창조주의... 슬픔이다...", actOptions: [{ name: "정화", handler: b => { b.enemy.hp -= 15; G.flashT=5; pushMsg("당신의 의지가 변칙점을 정화합니다!"); }}, { name: "분석", handler: b => { pushMsg("'아키텍트'의 후회와 고통이 뒤섞여있다."); }}, { name: "자비", handler: b => { pushMsg("자비는... 통하지 않는다. 오직 정화만이 길이다."); }}], attackPatterns: [ (t, dt, b) => { if(Math.floor(t*15)!==Math.floor((t-dt)*15)){ const x=rand(-10,G.width+10), y=rand(-10,G.height+10); const ang=Math.atan2(b.soul.y-y, b.soul.x-x); b.bullets.push({x,y, vx:Math.cos(ang)*2, vy:Math.sin(ang)*2, r:5, color:`hsl(${t*100 % 360}, 100%, 70%)`}); } }, (t, dt, b) => { if(Math.floor(t*2)!==Math.floor((t-dt)*2)){ for(let i=0; i<G.width; i+=20){ b.bullets.push({x:i, y:-10, vx:0, vy:2, r:4, color:'#ff00ff', update(bu){ if(bu.y > b.soul.y + 10) bu.vy=0; }}); } } }, (t, dt, b) => { b.box.targetW = G.width-80; b.box.targetH = G.height-180; if(Math.floor(t*20)!==Math.floor((t-dt)*20)){ const ang=rand(0, Math.PI*2); b.bullets.push({x:b.soul.x, y:b.soul.y, vx:Math.cos(ang)*4, vy:Math.sin(ang)*4, r:3, color:'#fff'}); } }, (t, dt, b) => { if(!b.waveState) b.waveState={t:0}; b.waveState.t += dt; G.shakeT=1; ctx.globalAlpha=0.2; drawRect(0,0,G.width, G.height, `hsl(${t*50 % 360}, 100%, 50%)`); ctx.globalAlpha=1; if(Math.floor(t*25)!==Math.floor((t-dt)*25)) { b.bullets.push({x:b.soul.x+rand(-20,20), y:b.soul.y+rand(-20,20), r:8, color:`#fff`, life:0.2, update(bu, dt){ bu.r-=dt*40; bu.life -= dt; if(bu.life <= 0)bu.dead=true; }}); } } ] },
 };
 
 // ------------------------------------------------------------
@@ -628,9 +704,8 @@ function loop() {
 
   if (G.state === "title") { titleUpdate(); titleDraw(); } 
   else if (G.state === "overworld") {
-    // BUG FIX: 엔딩 조건 검사 시 상점 NPC 제외
-    const allCombatNpcs = Object.values(world.stages).flatMap(s => s.npcs).filter(n => !n.isShop);
-    if (allCombatNpcs.every(n => n.defeated) && G.endingState.kills > 0) {
+    const allBosses = Object.values(world.stages).flatMap(s => s.npcs);
+    if (allBosses.every(n => n.defeated) && G.endingState.kills > 0) {
       G.state = 'ending';
       clearConfirmKeys();
       endDraw();
@@ -663,6 +738,14 @@ function shopUpdate() {
       G.player.gold = parseInt(G.player.gold || 0) - parseInt(item.price || 0);
       G.player.inv.push(item);
       shop.msg = `${item.name}을(를) 구매했습니다.`;
+      
+      // 구매 시 특별한 설명 표시
+      if (G.endingState.kills > 0 && item.genocideUseDesc) {
+        setTimeout(() => { shop.msg = item.genocideUseDesc; }, 1000);
+      } else if (item.useDesc) {
+        setTimeout(() => { shop.msg = item.useDesc; }, 1000);
+      }
+      
       beep("sawtooth",760,0.05,0.02);
     } else {
       shop.msg = "골드가 부족합니다.";
@@ -694,7 +777,7 @@ function titleDraw() {
   ctx.fillStyle="#000"; ctx.fillRect(0,0,G.width,G.height);
   drawCenterText("Echoes of a Forgotten System", G.width/2, 120, "#fff", 22);
   drawCenterText("Z/Enter 키로 시스템에 접속", G.width/2, 180, "#ff0", 16);
-  drawCenterText("v3.6 - The Architect's Will", G.width/2, 220, "#bbb", 14);
+  drawCenterText("v3.4 - The Architect's Will", G.width/2, 220, "#bbb", 14);
   const endings = saveManager.getUnlockedEndings();
   const unlockedCount = Object.values(endings).filter(Boolean).length;
   drawText(`기억 복원율: ${unlockedCount}/3`, 10, G.height-20, '#888', 'left', 12);
@@ -706,7 +789,7 @@ function endDraw() {
       endingType = 'lose';
     } else {
       const totalBosses = 4;
-      if (G.endingState.kills === 0 && (battle.currentBossId === 'anomaly' || G.state === 'ending')) {
+      if (G.endingState.kills === 0 && battle.currentBossId === 'anomaly') {
           endingType = 'pacifist';
       } else if (G.endingState.kills >= totalBosses) {
           endingType = 'destruction';
